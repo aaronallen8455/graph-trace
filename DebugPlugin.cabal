@@ -25,6 +25,7 @@ library
                , ghc
                , containers
                , syb
+               , template-haskell
   hs-source-dirs:      src
 
 executable exe

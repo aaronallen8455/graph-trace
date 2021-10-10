@@ -1,3 +1,4 @@
+{-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE ConstraintKinds #-}
@@ -9,9 +10,9 @@ import           GHC.TypeLits
 
 type Debug (str :: Symbol) = (?x :: String)
 
-test :: (Debug "yo", Num r) => r -> IO String
-test _ = do
-  x <- getLine
-  let ?x = x
-  pure ?x
+test :: Debug "yo" => String
+test = let ?x = newIP in
+  do ?x
+ where
+  newIP = ?x <> "test"
 

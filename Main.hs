@@ -1,21 +1,34 @@
 {-# OPTIONS_GHC -fplugin=Debug #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE DataKinds #-}
 
 import           System.IO.Unsafe (unsafePerformIO)
+import           GHC.Stack
 
-main :: IO ()
+import Debug
+
+main :: Debug "main" => IO ()
 main = do
-  let ?_debug_ip = (Nothing, "test")
+  --let ?_debug_ip = "insert"
   test
 
 -- test :: (?_debug_ip :: (Maybe String, String)) => IO ()
 -- test = test2
 
-test :: (?_debug_ip :: (Maybe String, String)) => IO ()
-test = print (?_debug_ip :: (Maybe String, String))
+trace :: (?_debug_ip :: String) => IO ()
+trace = putStrLn ?_debug_ip
+
+test :: Debug "blah" => IO ()
+test = do
+  trace
+  trace
+  another
+
+another :: Debug "another2" => IO ()
+another = trace
 
 -- test :: (?x :: String) => IO ()
 -- test = print ?x
 
-blah :: ()
-blah = unsafePerformIO $ putStrLn "test"
+st :: Debug "..." => IO ()
+st = putStrLn "..."
