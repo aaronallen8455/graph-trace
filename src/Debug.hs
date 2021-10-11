@@ -56,12 +56,13 @@ import qualified GHC.Types.Var as Ghc
 import qualified GHC.Unit.Module.Name as Ghc
 import qualified GHC.Utils.Outputable as Ghc
 
-import           Debug.Trace
+type Debug = (?_debug_ip :: Maybe (Maybe String, String)) -- (DebugKey key, ?_debug_ip :: String)
+type DebugKey (key :: Symbol) = (?_debug_ip :: Maybe (Maybe String, String)) -- (DebugKey key, ?_debug_ip :: String)
 
---type family DebugKey (key :: Symbol) :: Constraint
-type Debug = (?_debug_ip :: String) -- (DebugKey key, ?_debug_ip :: String)
-type DebugKey (key :: Symbol) = (?_debug_ip :: String) -- (DebugKey key, ?_debug_ip :: String)
+trace :: (?_debug_ip :: Maybe (Maybe String, String)) => IO ()
+trace = print (?_debug_ip :: Maybe (Maybe String, String))
 
+-- TODO modify dyn flags to include ImplicitParams?
 plugin :: Ghc.Plugin
 plugin =
   Ghc.defaultPlugin
@@ -256,7 +257,10 @@ mkWhereBind key = do
   Right exprPs
     <- fmap (Ghc.convertToHsExpr Ghc.Generated Ghc.noSrcSpan)
      . liftIO
-     $ TH.runQ [| ?_debug_ip <> key |]
+     $ TH.runQ [| case ?_debug_ip of
+                    Nothing -> Just (Nothing, key)
+                    Just (_, prev) -> Just (Just prev, key)
+               |]
 
   (exprRn, _) <- Ghc.rnLExpr exprPs
 
@@ -347,9 +351,10 @@ isDebuggerIpCt ct@Ghc.CDictCan{}
 -- because there will also be a wanted for the debug label constraint (or tf)
 
 tcPluginSolver :: Ghc.TcPluginSolver
-tcPluginSolver given derived wanted = do
-  --Ghc.tcPluginIO . putStrLn $ ppr (wanted, given, derived)
+tcPluginSolver [] [] wanted = do
+  -- Ghc.tcPluginIO . putStrLn $ ppr (wanted, given, derived)
   case filter isDebuggerIpCt wanted of
+
     [w]
       | Ghc.IPOccOrigin _ <- Ghc.ctl_origin . Ghc.ctev_loc $ Ghc.cc_ev w
       -> do
@@ -358,9 +363,14 @@ tcPluginSolver given derived wanted = do
       | otherwise
       -> do
            --Ghc.tcPluginIO . putStrLn . ppr $ Ghc.ctl_origin . Ghc.ctev_loc $ Ghc.cc_ev w
-           str <- Ghc.unsafeTcPluginTcM $ Ghc.mkStringExpr "inserted"
-           pure $ Ghc.TcPluginOk [(Ghc.EvExpr str, w)] []
+           let tupFstTy = Ghc.mkTyConApp Ghc.maybeTyCon [Ghc.stringTy]
+               tupSndTy = Ghc.stringTy
+               tupTy = Ghc.mkTyConApp Ghc.maybeTyCon
+                       [Ghc.mkTupleTy Ghc.Boxed [tupFstTy, tupSndTy]]
+               expr = Ghc.mkNothingExpr tupTy
+           pure $ Ghc.TcPluginOk [(Ghc.EvExpr expr, w)] []
     _ -> pure $ Ghc.TcPluginOk [] []
+tcPluginSolver _ _ _ = pure $ Ghc.TcPluginOk [] []
 
 -- tcPluginSolver :: IORef Bool -> Ghc.TcPluginSolver
 -- tcPluginSolver givenHandledRef given derived wanted = do

@@ -1,5 +1,4 @@
 {-# OPTIONS_GHC -fplugin=Debug #-}
-{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE DataKinds #-}
 
 import           System.IO.Unsafe (unsafePerformIO)
@@ -9,14 +8,11 @@ import Debug
 
 main :: IO ()
 main = do
-  --let ?_debug_ip = "insert"
+  --let ?_debug_ip = Just (Nothing, "insert")
   test
 
 -- test :: (?_debug_ip :: (Maybe String, String)) => IO ()
 -- test = test2
-
-trace :: (?_debug_ip :: String) => IO ()
-trace = putStrLn ?_debug_ip
 
 test :: DebugKey "blah" => IO ()
 test = do
@@ -30,5 +26,3 @@ another = trace
 -- test :: (?x :: String) => IO ()
 -- test = print ?x
 
-st :: DebugKey "..." => IO ()
-st = putStrLn "..."
