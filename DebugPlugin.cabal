@@ -26,6 +26,7 @@ library
                , containers
                , syb
                , template-haskell
+               , random
   hs-source-dirs:      src
 
 executable exe

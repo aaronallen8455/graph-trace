@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DataKinds #-}
@@ -17,8 +18,11 @@ import           Data.IORef
 import qualified Data.Map.Strict as M
 import           Data.Maybe
 import qualified Data.Set as S
+import           GHC.Exts (noinline)
 import           GHC.TypeLits (Symbol)
 import qualified Language.Haskell.TH as TH
+import           System.IO.Unsafe (unsafePerformIO)
+import qualified System.Random as Rand
 
 import qualified GHC.Builtin.Names as Ghc
 import qualified GHC.Builtin.Types as Ghc
@@ -257,9 +261,15 @@ mkWhereBind key = do
   Right exprPs
     <- fmap (Ghc.convertToHsExpr Ghc.Generated Ghc.noSrcSpan)
      . liftIO
-     $ TH.runQ [| case ?_debug_ip of
-                    Nothing -> Just (Nothing, key)
-                    Just (_, prev) -> Just (Just prev, key)
+     -- Writing it this way prevents GHC from aggresively inlining with -O2.
+     -- The call to noinline doesn't seem to help, but who knows.
+     $ TH.runQ [| noinline $! unsafePerformIO $ do
+                    newId <- fmap show (Rand.randomIO :: IO Word)
+                    case ?_debug_ip of
+                      Nothing ->
+                        pure $ Just (Nothing, key <> newId)
+                      Just (_, !prev) ->
+                        pure $ Just (Just prev, key <> newId)
                |]
 
   (exprRn, _) <- Ghc.rnLExpr exprPs
