@@ -9,13 +9,14 @@
 module Debug where
 
 import           Control.Applicative ((<|>))
+import           Control.Monad (guard)
 import           Control.Monad.IO.Class (liftIO)
 import           Data.Foldable
 import           Data.Traversable
 import           Data.IORef
-import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import           Data.Maybe
+import qualified Data.Set as S
 import           GHC.TypeLits (Symbol)
 import qualified Language.Haskell.TH as TH
 
@@ -55,8 +56,11 @@ import qualified GHC.Types.Var as Ghc
 import qualified GHC.Unit.Module.Name as Ghc
 import qualified GHC.Utils.Outputable as Ghc
 
+import           Debug.Trace
+
 --type family DebugKey (key :: Symbol) :: Constraint
-type Debug (key :: Symbol) = (?_debug_ip :: String) -- (DebugKey key, ?_debug_ip :: String)
+type Debug = (?_debug_ip :: String) -- (DebugKey key, ?_debug_ip :: String)
+type DebugKey (key :: Symbol) = (?_debug_ip :: String) -- (DebugKey key, ?_debug_ip :: String)
 
 plugin :: Ghc.Plugin
 plugin =
@@ -81,12 +85,14 @@ renamedResultAction tcGblEnv
     Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug") Nothing
 
   debugPredName <- Ghc.lookupOrig debugModule (Ghc.mkClsOcc "Debug")
+  debugKeyPredName <- Ghc.lookupOrig debugModule (Ghc.mkClsOcc "DebugKey")
 
-  let keyMap = M.fromList
-             $ concatMap (sigUsesDebugPred debugPredName) (Ghc.unLoc <$> sigs)
+  let nameMap = M.fromList
+              $ concatMap (sigUsesDebugPred debugPredName debugKeyPredName)
+                          (Ghc.unLoc <$> sigs)
   binds' <-
     (traverse . traverse . traverse . traverse)
-      (modifyBinding keyMap)
+      (modifyBinding nameMap)
       binds
   pure (tcGblEnv, hsGroup { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs })
 renamedResultAction tcGblEnv group = pure (tcGblEnv, group)
@@ -96,35 +102,53 @@ renamedResultAction tcGblEnv group = pure (tcGblEnv, group)
 --
 -- Are there ever more than one name in the TypeSig? yes:
 -- one, two :: Debug x => ...
-sigUsesDebugPred :: Ghc.Name -> Ghc.Sig Ghc.GhcRn -> [(Ghc.Name, String)]
-sigUsesDebugPred debugPredName
+sigUsesDebugPred
+  :: Ghc.Name
+  -> Ghc.Name
+  -> Ghc.Sig Ghc.GhcRn
+  -> [(Ghc.Name, Maybe Ghc.FastString)]
+sigUsesDebugPred debugPredName debugKeyPredName
   (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
     (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))) = concat $ do
+--       let tys = Ghc.unLoc <$> ctx
+--       guard $ any (hasDebugPred debugPredName) tys
+--       Ghc.unLoc <$> lNames
       key <- listToMaybe
-           $ mapMaybe (checkForDebugPred debugPredName) (Ghc.unLoc <$> ctx)
+           $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
+                      (Ghc.unLoc <$> ctx)
+
       Just $ zip (Ghc.unLoc <$> lNames) (repeat key)
-sigUsesDebugPred _ _ = []
+sigUsesDebugPred _ _ _ = []
 
 -- TODO need to recurse through HsValBinds. Use syb for this?
-checkForDebugPred :: Ghc.Name -> Ghc.HsType Ghc.GhcRn -> Maybe String
-checkForDebugPred debugPredName
+checkForDebugPred
+  :: Ghc.Name
+  -> Ghc.Name
+  -> Ghc.HsType Ghc.GhcRn
+  -> Maybe (Maybe Ghc.FastString)
+checkForDebugPred debugPredName _
+    (Ghc.HsTyVar _ _ (Ghc.L _ name))
+  | name == debugPredName = Just Nothing
+checkForDebugPred _ debugKeyPredName
     (Ghc.HsAppTy _ (Ghc.L _ (Ghc.HsTyVar _ _ (Ghc.L _ name))) (Ghc.L _ (Ghc.HsTyLit _ (Ghc.HsStrTy _ key))))
-  -- TODO pass in Debug name
-  | name == debugPredName = Just $ Ghc.unpackFS key
-checkForDebugPred n (Ghc.HsForAllTy _ _ (Ghc.L _ ty)) = checkForDebugPred n ty
-checkForDebugPred n (Ghc.HsParTy _ (Ghc.L _ ty)) = checkForDebugPred n ty
-checkForDebugPred _ _ = Nothing
+  | name == debugKeyPredName = Just (Just key)
+checkForDebugPred n nk (Ghc.HsForAllTy _ _ (Ghc.L _ ty)) = checkForDebugPred n nk ty
+checkForDebugPred n nk (Ghc.HsParTy _ (Ghc.L _ ty)) = checkForDebugPred n nk ty
+checkForDebugPred _ _ _ = Nothing
 -- need a case for nested QualTy?
 
 modifyBinding
-  :: M.Map Ghc.Name String
+  :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
   -> Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
-modifyBinding keyMap
+modifyBinding nameMap
   bnd@(Ghc.FunBind _ (Ghc.L _ name) mg@(Ghc.MG _ alts _) _)
-    | Just key <- M.lookup name keyMap
+    | Just mUserKey <- M.lookup name nameMap
     = do
-      newAlts <- (traverse . traverse . traverse) (modifyMatch key) alts
+      let key = maybe (Ghc.getOccString name) Ghc.unpackFS mUserKey
+      newAlts <- (traverse . traverse . traverse)
+                   (modifyMatch key)
+                   alts
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
 modifyBinding _ bnd = pure bnd
 

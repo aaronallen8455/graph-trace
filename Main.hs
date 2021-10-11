@@ -7,7 +7,7 @@ import           GHC.Stack
 
 import Debug
 
-main :: Debug "main" => IO ()
+main :: IO ()
 main = do
   --let ?_debug_ip = "insert"
   test
@@ -18,17 +18,17 @@ main = do
 trace :: (?_debug_ip :: String) => IO ()
 trace = putStrLn ?_debug_ip
 
-test :: Debug "blah" => IO ()
+test :: DebugKey "blah" => IO ()
 test = do
   trace
   trace
   another
 
-another :: Debug "another2" => IO ()
+another :: Debug => IO ()
 another = trace
 
 -- test :: (?x :: String) => IO ()
 -- test = print ?x
 
-st :: Debug "..." => IO ()
+st :: DebugKey "..." => IO ()
 st = putStrLn "..."
