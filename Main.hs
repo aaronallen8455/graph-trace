@@ -19,16 +19,18 @@ test :: DebugKey "blah" => IO ()
 test = do
   trace
   inWhere
-  let inLet :: Debug => IO ()
+  let inLet :: IO ()
       inLet = do
-        trace
+        letWhere
+          where letWhere = trace
   inLet
   another
     where
-      inWhere :: Debug => IO ()
+      inWhere :: IO ()
       inWhere = do
         trace
-        another
+        innerWhere
+          where innerWhere = trace
 
 another :: Debug => IO ()
 another = trace
