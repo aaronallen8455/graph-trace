@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -fplugin=Debug #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ImplicitParams #-}
 
 import           GHC.Stack
 
@@ -9,7 +10,6 @@ main :: IO ()
 main = do
   --let ?_debug_ip = Just (Nothing, "insert")
   test
-  test
 
 
 -- test :: (?_debug_ip :: (Maybe String, String)) => IO ()
@@ -18,9 +18,17 @@ main = do
 test :: DebugKey "blah" => IO ()
 test = do
   trace
-  trace
+  inWhere
+  let inLet :: Debug => IO ()
+      inLet = do
+        trace
+  inLet
   another
-  another
+    where
+      inWhere :: Debug => IO ()
+      inWhere = do
+        trace
+        another
 
 another :: Debug => IO ()
 another = trace

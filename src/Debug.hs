@@ -13,6 +13,8 @@ import           Control.Applicative ((<|>))
 import           Control.Monad (guard)
 import           Control.Monad.IO.Class (liftIO)
 import           Data.Foldable
+import           Data.Functor.Const
+import           Data.Generics (everything, everywhereM, mkM, mkQ)
 import           Data.Traversable
 import           Data.IORef
 import qualified Data.Map.Strict as M
@@ -92,15 +94,24 @@ renamedResultAction tcGblEnv
   debugPredName <- Ghc.lookupOrig debugModule (Ghc.mkClsOcc "Debug")
   debugKeyPredName <- Ghc.lookupOrig debugModule (Ghc.mkClsOcc "DebugKey")
 
-  let nameMap = M.fromList
-              $ concatMap (sigUsesDebugPred debugPredName debugKeyPredName)
-                          (Ghc.unLoc <$> sigs)
+  -- find all uses of debug predicates in type signatures
+  let nameMap =
+        everything M.union
+          (mkQ mempty $ sigUsesDebugPred debugPredName debugKeyPredName)
+          hsGroup
+
+  -- Find the functions corresponding to those signatures and modify their definition.
   binds' <-
-    (traverse . traverse . traverse . traverse)
-      (modifyBinding nameMap)
-      binds
+    mkM (modifyBinding nameMap)
+      `everywhereM` binds
+
   pure (tcGblEnv, hsGroup { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs })
 renamedResultAction tcGblEnv group = pure (tcGblEnv, group)
+
+-- There's an issue with where bound functions. Unless they have a signature,
+-- the outer context is not inheritted, so if they call trace then the IP is
+-- set to Nothing. Maybe the type checker plugin can look at if the use demanding
+-- the IP constraint is from the trace function and do something different if so.
 
 -- | If a sig contains the Debug constraint, get the name of the corresponding
 -- binding.
@@ -111,19 +122,17 @@ sigUsesDebugPred
   :: Ghc.Name
   -> Ghc.Name
   -> Ghc.Sig Ghc.GhcRn
-  -> [(Ghc.Name, Maybe Ghc.FastString)]
+  -> M.Map Ghc.Name (Maybe Ghc.FastString)
 sigUsesDebugPred debugPredName debugKeyPredName
-  (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
-    (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))) = concat $ do
---       let tys = Ghc.unLoc <$> ctx
---       guard $ any (hasDebugPred debugPredName) tys
---       Ghc.unLoc <$> lNames
-      key <- listToMaybe
+  sig@(Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
+    (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))) =
+      let mKey = listToMaybe
            $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
                       (Ghc.unLoc <$> ctx)
-
-      Just $ zip (Ghc.unLoc <$> lNames) (repeat key)
-sigUsesDebugPred _ _ _ = []
+       in case mKey of
+            Nothing -> mempty
+            Just key -> M.fromList $ zip (Ghc.unLoc <$> lNames) (repeat key)
+sigUsesDebugPred _ _ sig = mempty
 
 -- TODO need to recurse through HsValBinds. Use syb for this?
 checkForDebugPred
@@ -151,120 +160,46 @@ modifyBinding nameMap
     | Just mUserKey <- M.lookup name nameMap
     = do
       let key = maybe (Ghc.getOccString name) Ghc.unpackFS mUserKey
-      newAlts <- (traverse . traverse . traverse)
-                   (modifyMatch key)
-                   alts
+
+      ipNewExpr <- mkNewIpExpr key
+
+      let newAlts =
+            (fmap . fmap . fmap)
+              (modifyMatch ipNewExpr)
+              alts
+
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
 modifyBinding _ bnd = pure bnd
-
--- Oops, IP don't play well with where clauses... will not be able to debug from
--- inside a where bound function.
--- Solution: can iterate through the where bound functions and recursively
--- insert the alteration. Doesn't work because we are going to be doing
--- unsafe IO and the random identifier that gets produced must be the same
--- across all things within that scope.
--- Solution: We insert two pieces of code: 1) a where clause where the new
--- identifier is bound and 2) the let statements to bind the IP to that new val,
--- this way the val is shared across all scopes.
---
--- The new plan:
--- For each FunBind that has a Debug constraint, add a where clause that binds
--- a 'newIP' variable which makes the new debug key from the old one.
--- In all function bodies, add a let binding that binds the IP to this new
--- value. This will probably entail tracking the name of the where bound var.
 
 -- | Add a where bind for the new value of the IP, then add let bindings to the
 -- front of each GRHS to set the new value of the IP in that scope.
 modifyMatch
-  :: String
+  :: Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-  -> Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
-modifyMatch key
+  -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
+modifyMatch ipNewExpr
   m@Ghc.Match
     { Ghc.m_grhss =
         grhs@Ghc.GRHSs
-          { Ghc.grhssGRHSs = grhss
-          , Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds
-          }
+          { Ghc.grhssGRHSs = grhss }
     } = do
-      uniq <- Ghc.getUniqueM
-      let whereBindName = Ghc.mkSystemVarName uniq "new_debug_ip"
+      let grhss' = fmap (updateDebugIPInGRHS ipNewExpr) <$> grhss
 
-      whereBindExpr <- mkWhereBind key
-
-      let bind = Ghc.FunBind
-            { Ghc.fun_ext = mempty
-            , Ghc.fun_id = Ghc.noLoc whereBindName
-            , Ghc.fun_matches =
-                Ghc.MG
-                  { Ghc.mg_ext = Ghc.NoExtField
-                  , Ghc.mg_alts = Ghc.noLoc
-                    [Ghc.noLoc Ghc.Match
-                      { Ghc.m_ext = Ghc.NoExtField
-                      , Ghc.m_ctxt = Ghc.FunRhs
-                          { Ghc.mc_fun = Ghc.noLoc whereBindName
-                          , Ghc.mc_fixity = Ghc.Prefix
-                          , Ghc.mc_strictness = Ghc.NoSrcStrict
-                          }
-                      , Ghc.m_pats = []
-                      , Ghc.m_grhss = Ghc.GRHSs
-                          { Ghc.grhssExt = Ghc.NoExtField
-                          , Ghc.grhssGRHSs =
-                            [ Ghc.noLoc $ Ghc.GRHS
-                                Ghc.NoExtField
-                                []
-                                whereBindExpr
-                            ]
-                          , Ghc.grhssLocalBinds = Ghc.noLoc $
-                              Ghc.EmptyLocalBinds Ghc.NoExtField
-                          }
-                      }
-                    ]
-                  , Ghc.mg_origin = Ghc.Generated
-                  }
-            , Ghc.fun_tick = []
+       in m { Ghc.m_grhss = grhs
+                { Ghc.grhssGRHSs = grhss' }
             }
-
-          wrappedBind =
-            (Ghc.NonRecursive, Ghc.unitBag (Ghc.noLoc bind))
-
-          whereBinds' =
-            case whereBinds of
-              Ghc.EmptyLocalBinds x ->
-                Ghc.HsValBinds Ghc.NoExtField
-                  (Ghc.XValBindsLR (Ghc.NValBinds [wrappedBind] []))
-
-              Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
-                let otherBinds = updateDebugIPInBinds whereBindName <$> binds
-
-                 in Ghc.HsValBinds x
-                      (Ghc.XValBindsLR
-                        (Ghc.NValBinds (wrappedBind : otherBinds) sigs
-                        )
-                      )
-
-              _ -> whereBinds
-
-          grhss' = fmap (updateDebugIPInGRHS whereBindName) <$> grhss
-
-      pure m { Ghc.m_grhss =
-                 grhs
-                   { Ghc.grhssGRHSs = grhss'
-                   , Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds'
-                   } }
 
 -- | Produce the contents of the where binding that contains the new debug IP
 -- value, generated by creating a new ID and pairing it with the old one.
-mkWhereBind :: String -> Ghc.TcM (Ghc.LHsExpr Ghc.GhcRn)
-mkWhereBind key = do
-  -- TODO This is where the new ID will be generated and paired with the old ID
+mkNewIpExpr :: String -> Ghc.TcM (Ghc.LHsExpr Ghc.GhcRn)
+mkNewIpExpr key = do
   Right exprPs
     <- fmap (Ghc.convertToHsExpr Ghc.Generated Ghc.noSrcSpan)
      . liftIO
-     -- Writing it this way prevents GHC from aggresively inlining with -O2.
-     -- The call to noinline doesn't seem to help, but who knows.
+     -- Writing it this way prevents GHC from floating this out with -O2.
+     -- The call to noinline doesn't seem to contribute, but who knows.
      $ TH.runQ [| noinline $! unsafePerformIO $ do
-                    newId <- fmap show (Rand.randomIO :: IO Word)
+                    !newId <- fmap show (Rand.randomIO :: IO Word)
                     case ?_debug_ip of
                       Nothing ->
                         pure $ Just (Nothing, key <> newId)
@@ -276,38 +211,20 @@ mkWhereBind key = do
 
   pure exprRn
 
--- TODO can use syb for this?
-updateDebugIPInBinds
-  :: Ghc.Name
-  -> (Ghc.RecFlag, Ghc.LHsBinds Ghc.GhcRn)
-  -> (Ghc.RecFlag, Ghc.LHsBinds Ghc.GhcRn)
-updateDebugIPInBinds varName (rec, binds)
-  = (rec, fmap updateBind <$> binds)
-    where
-      updateBind b@Ghc.FunBind{ Ghc.fun_matches = m@Ghc.MG{ Ghc.mg_alts = alts } }
-        = b { Ghc.fun_matches =
-              m { Ghc.mg_alts = (fmap . fmap . fmap) updateMatch alts }
-            }
-      updateBind b = b
-      updateMatch m@Ghc.Match{Ghc.m_grhss = g@Ghc.GRHSs{Ghc.grhssGRHSs = grhss}}
-        = m{Ghc.m_grhss =
-              g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS varName) <$> grhss }
-           }
-
 updateDebugIPInGRHS
-  :: Ghc.Name
+  :: Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-updateDebugIPInGRHS varName (Ghc.GRHS x guards body)
-  = Ghc.GRHS x guards (updateDebugIPInExpr varName body)
+updateDebugIPInGRHS ipNewExpr (Ghc.GRHS x guards body)
+  = Ghc.GRHS x guards (updateDebugIPInExpr ipNewExpr body)
 
 -- | Given the name of the variable to assign to the debug IP, create a let
 -- expression that updates the IP in that scope.
 updateDebugIPInExpr
-  :: Ghc.Name
+  :: Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.LHsExpr Ghc.GhcRn
-updateDebugIPInExpr varName
+updateDebugIPInExpr ipNewExpr
   = Ghc.noLoc
   . Ghc.HsLet Ghc.NoExtField
       ( Ghc.noLoc $ Ghc.HsIPBinds
@@ -316,10 +233,7 @@ updateDebugIPInExpr varName
               [ Ghc.noLoc $ Ghc.IPBind
                   Ghc.NoExtField
                   (Left . Ghc.noLoc $ Ghc.HsIPName "_debug_ip")
-                  (Ghc.noLoc $ Ghc.HsVar
-                    Ghc.NoExtField
-                    (Ghc.noLoc varName)
-                  )
+                  ipNewExpr
               ]
           )
       )
