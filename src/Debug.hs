@@ -161,32 +161,103 @@ modifyBinding nameMap
     = do
       let key = maybe (Ghc.getOccString name) Ghc.unpackFS mUserKey
 
-      ipNewExpr <- mkNewIpExpr key
+      -- ipNewExpr <- mkNewIpExpr key
+
+
+      whereBindExpr <- mkNewIpExpr key
 
       let newAlts =
             (fmap . fmap . fmap)
-              (modifyMatch ipNewExpr)
+              (modifyMatch nameMap whereBindExpr)
               alts
 
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
 modifyBinding _ bnd = pure bnd
 
+mkWhereBindName :: Ghc.TcM Ghc.Name
+mkWhereBindName = do
+  uniq <- Ghc.getUniqueM
+  pure $ Ghc.mkSystemVarName uniq "new_debug_ip"
+
+mkWhereBinding :: Ghc.Name -> Ghc.LHsExpr Ghc.GhcRn -> Ghc.LHsExpr Ghc.GhcRn
+mkWhereBinding name expr =
+ Ghc.noLoc Ghc.FunBind
+   { Ghc.fun_ext = mempty
+   , Ghc.fun_id = Ghc.noLoc whereBindName
+   , Ghc.fun_matches =
+       Ghc.MG
+         { Ghc.mg_ext = Ghc.NoExtField
+         , Ghc.mg_alts = Ghc.noLoc
+           [Ghc.noLoc Ghc.Match
+             { Ghc.m_ext = Ghc.NoExtField
+             , Ghc.m_ctxt = Ghc.FunRhs
+                 { Ghc.mc_fun = Ghc.noLoc whereBindName
+                 , Ghc.mc_fixity = Ghc.Prefix
+                 , Ghc.mc_strictness = Ghc.NoSrcStrict
+                 }
+             , Ghc.m_pats = []
+             , Ghc.m_grhss = Ghc.GRHSs
+                 { Ghc.grhssExt = Ghc.NoExtField
+                 , Ghc.grhssGRHSs =
+                   [ Ghc.noLoc $ Ghc.GRHS
+                       Ghc.NoExtField
+                       []
+                       whereBindExpr
+                   ]
+                 , Ghc.grhssLocalBinds = Ghc.noLoc $
+                     Ghc.EmptyLocalBinds Ghc.NoExtField
+                 }
+             }
+           ]
+         , Ghc.mg_origin = Ghc.Generated
+         }
+   , Ghc.fun_tick = []
+   }
+
 -- | Add a where bind for the new value of the IP, then add let bindings to the
 -- front of each GRHS to set the new value of the IP in that scope.
 modifyMatch
-  :: Ghc.LHsExpr Ghc.GhcRn
+  :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  -> Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-modifyMatch ipNewExpr
+modifyMatch nameMap whereBindExpr
   m@Ghc.Match
     { Ghc.m_grhss =
         grhs@Ghc.GRHSs
-          { Ghc.grhssGRHSs = grhss }
+          { Ghc.grhssGRHSs = grhss
+          , Ghc.grhssLocalBinds = whereBinds
+          }
     } = do
-      let grhss' = fmap (updateDebugIPInGRHS ipNewExpr) <$> grhss
+      whereBindName <- mkWhereBindName
+
+      let grhss' = fmap (updateDebugIPInGRHS whereBindName) <$> grhss
+
+          wrappedBind = (Ghc.NonRecursive, Ghc.unitBag whereBindExpr)
+          whereBinds' =
+            case whereBinds of
+              Ghc.EmptyLocalBinds x ->
+                Ghc.HsValBinds Ghc.NoExtField
+                  (Ghc.XValBindsLR (Ghc.NValBinds [wrappedBind] []))
+
+              Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
+                -- only update the where bindings that don't have Debug predicates
+                let otherBinds = updateDebugIPInBinds whereBindName <$> binds
+
+                 in Ghc.HsValBinds x
+                      (Ghc.XValBindsLR
+                        (Ghc.NValBinds (wrappedBind : otherBinds) sigs
+                        )
+                      )
+
+              _ -> whereBinds
+
+
 
        in m { Ghc.m_grhss = grhs
-                { Ghc.grhssGRHSs = grhss' }
+                { Ghc.grhssGRHSs = grhss'
+                , Ghc.grhssLocalBinds = whereBinds'
+                }
             }
 
 -- | Produce the contents of the where binding that contains the new debug IP
@@ -212,19 +283,19 @@ mkNewIpExpr key = do
   pure exprRn
 
 updateDebugIPInGRHS
-  :: Ghc.LHsExpr Ghc.GhcRn
+  :: Ghc.Name
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-updateDebugIPInGRHS ipNewExpr (Ghc.GRHS x guards body)
-  = Ghc.GRHS x guards (updateDebugIPInExpr ipNewExpr body)
+updateDebugIPInGRHS whereBindName (Ghc.GRHS x guards body)
+  = Ghc.GRHS x guards (updateDebugIPInExpr whereBindName body)
 
 -- | Given the name of the variable to assign to the debug IP, create a let
 -- expression that updates the IP in that scope.
 updateDebugIPInExpr
-  :: Ghc.LHsExpr Ghc.GhcRn
+  :: Ghc.Name
   -> Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.LHsExpr Ghc.GhcRn
-updateDebugIPInExpr ipNewExpr
+updateDebugIPInExpr whereBindName
   = Ghc.noLoc
   . Ghc.HsLet Ghc.NoExtField
       ( Ghc.noLoc $ Ghc.HsIPBinds
@@ -233,7 +304,9 @@ updateDebugIPInExpr ipNewExpr
               [ Ghc.noLoc $ Ghc.IPBind
                   Ghc.NoExtField
                   (Left . Ghc.noLoc $ Ghc.HsIPName "_debug_ip")
-                  ipNewExpr
+                  (Ghc.HsVar Ghc.NoExtField
+                    (Ghc.noLoc whereBindName)
+                  )
               ]
           )
       )
