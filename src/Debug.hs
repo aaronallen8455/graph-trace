@@ -205,6 +205,38 @@ mkWhereBinding whereBindName whereBindExpr =
    , Ghc.fun_tick = []
    }
 
+-- TODO as an optimization, it doesn't seem necessary to gather all the Names
+-- from the sigs all at once, can probably look at them when examining the
+-- where bound matches.
+
+-- | Add a let binding setting the new value of the IP to each where bound
+-- function that does not exist in the map.
+addLetToWhereBinds
+  :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  -> Ghc.Name
+  -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
+  -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
+addLetToWhereBinds nameMap whereBindName
+  m@Ghc.Match
+    { Ghc.m_grhss =
+        grhs@Ghc.GRHSs
+          { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds }
+    } =
+  let newWhereBinds =
+        case whereBinds of
+          Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
+            let binds' =
+                  fmap (updateDebugIPInBinds nameMap whereBindName)
+                       binds
+             in Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds' sigs))
+          _ -> whereBinds
+   in m{ Ghc.m_grhss =
+           grhs{ Ghc.grhssLocalBinds = Ghc.L whereLoc newWhereBinds }
+       }
+
+-- as part of the let binding, should emit an event for entry into a function.
+-- We need to know about function ids even if no trace is used within the body.
+
 -- | Add a where bind for the new value of the IP, then add let bindings to the
 -- front of each GRHS to set the new value of the IP in that scope.
 modifyMatch
@@ -212,53 +244,55 @@ modifyMatch
   -> Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
-modifyMatch nameMap whereBindExpr
-  m@Ghc.Match
-    { Ghc.m_grhss =
-        grhs@Ghc.GRHSs
-          { Ghc.grhssGRHSs = grhss
-          , Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds
-          }
-    } = do
-      whereBindName <- mkWhereBindName
+modifyMatch nameMap whereBindExpr match = do
+  whereBindName <- mkWhereBindName
 
-      let grhss' = fmap (updateDebugIPInGRHS whereBindName) <$> grhss
-          ipValWhereBind = mkWhereBinding whereBindName whereBindExpr
+  -- only update the where bindings that don't have Debug
+  -- predicates, those that do will be addressed via recursion.
+  -- It is also necesarry to descend into potential recursive wheres
+  -- but the recursion needs to stop if a known name is found.
+  let stopCondition :: Ghc.HsBind Ghc.GhcRn -> Bool
+      stopCondition b@Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
+        = M.member funName nameMap
 
-          wrappedBind = (Ghc.NonRecursive, Ghc.unitBag ipValWhereBind)
+      -- recurse entire the entire match to add let bindings to all where
+      -- clauses, including those belonging to let-bound terms at any
+      -- nesting depth
+      match'@Ghc.Match
+        { Ghc.m_grhss =
+            grhs@Ghc.GRHSs
+              { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds
+              , Ghc.grhssGRHSs = grhsList
+              }
+        } = Syb.everywhereBut
+              (Syb.mkQ False stopCondition)
+              (Syb.mkT $ addLetToWhereBinds nameMap whereBindName)
+              match
 
-          whereBinds' =
-            case whereBinds of
-              Ghc.EmptyLocalBinds x ->
-                Ghc.HsValBinds Ghc.NoExtField
-                  (Ghc.XValBindsLR (Ghc.NValBinds [wrappedBind] []))
+      ipValWhereBind = mkWhereBinding whereBindName whereBindExpr
 
-              Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
-                -- only update the where bindings that don't have Debug
-                -- predicates, those that do will be addressed via recursion.
-                -- It is also necesarry to descend into potential recursive wheres
-                -- but the recursion needs to stop if a known name is found.
-                let stopCondition :: Ghc.HsBind Ghc.GhcRn -> Bool
-                    stopCondition b@Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
-                      = M.member funName nameMap
+      wrappedBind = (Ghc.NonRecursive, Ghc.unitBag ipValWhereBind)
 
-                    otherBinds =
-                      Syb.everywhereBut
-                        (Syb.mkQ False stopCondition)
-                        (Syb.mkT $ updateDebugIPInBinds nameMap whereBindName)
-                        binds
+      -- add the generated bind to the function's where clause
+      whereBinds' =
+        case whereBinds of
+          Ghc.EmptyLocalBinds x ->
+            Ghc.HsValBinds Ghc.NoExtField
+              (Ghc.XValBindsLR (Ghc.NValBinds [wrappedBind] []))
 
-                 in Ghc.HsValBinds x
-                      (Ghc.XValBindsLR
-                        (Ghc.NValBinds (wrappedBind : otherBinds) sigs
-                        )
-                      )
+          Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
+             Ghc.HsValBinds x
+               (Ghc.XValBindsLR
+                 (Ghc.NValBinds (wrappedBind : binds) sigs
+                 )
+               )
 
-              _ -> whereBinds
+          _ -> whereBinds
 
-      pure m { Ghc.m_grhss = grhs
-                 { Ghc.grhssGRHSs = grhss'
-                 , Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds'
+  pure match'{ Ghc.m_grhss = grhs
+                 { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds'
+                 , Ghc.grhssGRHSs =
+                     fmap (updateDebugIPInGRHS whereBindName) <$> grhsList
                  }
              }
 
