@@ -7,7 +7,12 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
-module Debug where
+module Debug
+  ( plugin
+  , trace
+  , entry
+  , module DT
+  ) where
 
 import           Control.Applicative ((<|>))
 import           Control.Concurrent.MVar
@@ -24,6 +29,7 @@ import qualified Data.Set as S
 import           GHC.Exts (noinline)
 import           GHC.TypeLits (Symbol)
 import qualified Language.Haskell.TH as TH
+import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Rand
 
@@ -63,31 +69,40 @@ import qualified GHC.Types.Var as Ghc
 import qualified GHC.Unit.Module.Name as Ghc
 import qualified GHC.Utils.Outputable as Ghc
 
-type Debug = (?_debug_ip :: Maybe (Maybe String, String)) -- (DebugKey key, ?_debug_ip :: String)
-type DebugKey (key :: Symbol) = (?_debug_ip :: Maybe (Maybe String, String)) -- (DebugKey key, ?_debug_ip :: String)
-
-data DebugTag =
-  DT { invocationId :: Word
-     , funName :: Ghc.Name
-     }
+import           Debug.Internal.Types
+import qualified Debug.Internal.Types as DT
 
 logFilePath :: FilePath
 logFilePath = "debug_log.txt"
 
+fileLock :: MVar Handle
+fileLock = unsafePerformIO $ do
+  h <- openFile logFilePath AppendMode
+  hSetBuffering h NoBuffering
+  newMVar h
 {-# NOINLINE fileLock  #-}
-fileLock :: MVar ()
-fileLock = unsafePerformIO $ newMVar ()
 
+trace :: (?_debug_ip :: Maybe DebugIPTy) => String -> a -> a
+trace msg x =
+  case ?_debug_ip of
+    Nothing -> x
+    Just ip -> unsafePerformIO $ do
+      withMVar fileLock $ \h -> do
+        let ev = TraceEvent (snd ip) msg
+        hPutStrLn h $ eventToLogStr ev
+      pure x
 {-# NOINLINE trace  #-}
-trace :: (?_debug_ip :: Maybe (Maybe String, String)) => IO ()
-trace = print (?_debug_ip :: Maybe (Maybe String, String))
 
+entry :: (?_debug_ip :: Maybe DebugIPTy) => a -> a
+entry x =
+  case ?_debug_ip of
+    Nothing -> x
+    Just ip -> unsafePerformIO $ do
+      withMVar fileLock $ \h -> do
+        let ev = EntryEvent (snd ip) (fst ip)
+        hPutStrLn h $ eventToLogStr ev
+      pure x
 {-# NOINLINE entry  #-}
-entry :: a -> a
-entry x = unsafePerformIO $ do
-  withMVar fileLock $ \_ ->
-    appendFile logFilePath "test\n"
-  pure x
 
 plugin :: Ghc.Plugin
 plugin =
@@ -131,7 +146,7 @@ plugin =
 -- of all events so that the order of occurrence can be reconstructed.
 -- What should written to the file for each event?
 -- for the entry event:
--- entry|module|functionName|invocationId|parentId(optional)\n
+-- entry|module|functionName|invocationId|parentName|parentId(optional)\n
 -- trace|functionName|invocationId|message\n
 -- TODO what about class methods?
 -- TODO what about traces places in guards? Will probably need to put the let
@@ -149,11 +164,15 @@ renamedResultAction tcGblEnv
     = do
   hscEnv <- Ghc.getTopEnv
 
+  Ghc.Found _ debugTypesModule <- liftIO $
+    Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug.Internal.Types") Nothing
+
   Ghc.Found _ debugModule <- liftIO $
     Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug") Nothing
 
-  debugPredName <- Ghc.lookupOrig debugModule (Ghc.mkClsOcc "Debug")
-  debugKeyPredName <- Ghc.lookupOrig debugModule (Ghc.mkClsOcc "DebugKey")
+  debugPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "Debug")
+  debugKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugKey")
+  entryName <- Ghc.lookupOrig debugModule (Ghc.mkVarOcc "entry")
 
   -- find all uses of debug predicates in type signatures
   let nameMap =
@@ -163,7 +182,7 @@ renamedResultAction tcGblEnv
 
   -- Find the functions corresponding to those signatures and modify their definition.
   binds' <-
-    Syb.mkM (modifyBinding nameMap)
+    Syb.mkM (modifyBinding nameMap entryName)
       `Syb.everywhereM` binds
 
   pure (tcGblEnv, hsGroup { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs })
@@ -208,23 +227,26 @@ checkForDebugPred _ _ _ = Nothing
 
 modifyBinding
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  -> Ghc.Name
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
   -> Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
-modifyBinding nameMap
+modifyBinding nameMap emitEntryName
   bnd@(Ghc.FunBind _ (Ghc.L _ name) mg@(Ghc.MG _ alts _) _)
     | Just mUserKey <- M.lookup name nameMap
     = do
-      let key = maybe (Ghc.getOccString name) Ghc.unpackFS mUserKey
+      let key = case mUserKey of
+                  Nothing -> Left $ Ghc.getOccString name
+                  Just k -> Right $ Ghc.unpackFS k
 
       whereBindExpr <- mkNewIpExpr key
 
       newAlts <-
         (traverse . traverse . traverse)
-          (modifyMatch nameMap whereBindExpr)
+          (modifyMatch nameMap whereBindExpr emitEntryName)
           alts
 
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
-modifyBinding _ bnd = pure bnd
+modifyBinding _ _ bnd = pure bnd
 
 mkWhereBindName :: Ghc.TcM Ghc.Name
 mkWhereBindName = do
@@ -304,9 +326,10 @@ addLetToWhereBinds nameMap whereBindName
 modifyMatch
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.LHsExpr Ghc.GhcRn
+  -> Ghc.Name
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
-modifyMatch nameMap whereBindExpr match = do
+modifyMatch nameMap whereBindExpr emitEntryName match = do
   whereBindName <- mkWhereBindName
 
   -- only update the where bindings that don't have Debug
@@ -354,10 +377,14 @@ modifyMatch nameMap whereBindExpr match = do
   pure match'{ Ghc.m_grhss = grhs
                  { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds'
                  , Ghc.grhssGRHSs =
-                     fmap (updateDebugIPInGRHS whereBindName) <$> grhsList
+                     fmap ( updateDebugIPInGRHS whereBindName
+                          . emitEntryEvent emitEntryName
+                          )
+                       <$> grhsList
                  }
              }
 
+-- | Used to add the let binding to where binds
 updateDebugIPInBinds
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.Name
@@ -382,20 +409,27 @@ updateDebugIPInBinds nameMap whereVarName (rec, binds)
 
 -- | Produce the contents of the where binding that contains the new debug IP
 -- value, generated by creating a new ID and pairing it with the old one.
-mkNewIpExpr :: String -> Ghc.TcM (Ghc.LHsExpr Ghc.GhcRn)
-mkNewIpExpr key = do
+mkNewIpExpr :: Either FunName UserKey -> Ghc.TcM (Ghc.LHsExpr Ghc.GhcRn)
+mkNewIpExpr newKey = do
   Right exprPs
     <- fmap (Ghc.convertToHsExpr Ghc.Generated Ghc.noSrcSpan)
      . liftIO
      -- Writing it this way prevents GHC from floating this out with -O2.
      -- The call to noinline doesn't seem to contribute, but who knows.
-     $ TH.runQ [| noinline $! unsafePerformIO $ do
-                    !newId <- fmap show (Rand.randomIO :: IO Word)
-                    case ?_debug_ip of
-                      Nothing ->
-                        pure $ Just (Nothing, key <> newId)
-                      Just (_, !prev) ->
-                        pure $ Just (Just prev, key <> newId)
+     $ TH.runQ [| noinline $
+                    let mPrevTag = fmap snd ?_debug_ip
+                     in case (mPrevTag, newKey) of
+                          -- If override key matches with previous tag, keep the id
+                          (Just prevTag, Right userKey)
+                            | debugKey prevTag == Right userKey
+                            -> ?_debug_ip
+                          _ -> unsafePerformIO $ do
+                            newId <- Rand.randomIO :: IO Word
+                            let newTag = DT
+                                  { invocationId = newId
+                                  , debugKey = newKey
+                                  }
+                            pure $ Just (mPrevTag, newTag)
                |]
 
   (exprRn, _) <- Ghc.rnLExpr exprPs
@@ -409,6 +443,16 @@ mkNewIpExpr key = do
 -- Let bindings don't matter
 -- What about where clauses of let bindings? Will need to recurse into GRH
 -- as well as local binds? Yes
+
+emitEntryEvent
+  :: Ghc.Name
+  -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
+  -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
+emitEntryEvent emitEntryName (Ghc.GRHS x guards body) =
+  Ghc.GRHS x guards . Ghc.noLoc $
+    Ghc.HsApp Ghc.NoExtField
+      (Ghc.noLoc . Ghc.HsVar Ghc.NoExtField $ Ghc.noLoc emitEntryName)
+      body
 
 updateDebugIPInGRHS
   :: Ghc.Name
@@ -460,7 +504,7 @@ isDebuggerIpCt ct@Ghc.CDictCan{}
   , Just ipKey <- Ghc.isStrLitTy ty
   , ipKey == debuggerIpKey
   = True
-  | otherwise = False
+isDebuggerIpCt _ = False
 
 tcPluginSolver :: Ghc.TcPluginSolver
 tcPluginSolver [] [] wanted = do
@@ -474,12 +518,7 @@ tcPluginSolver [] [] wanted = do
         pure $ Ghc.TcPluginOk [] []
       | otherwise
       -> do
-           --Ghc.tcPluginIO . putStrLn . ppr $ Ghc.ctl_origin . Ghc.ctev_loc $ Ghc.cc_ev w
-           let tupFstTy = Ghc.mkTyConApp Ghc.maybeTyCon [Ghc.stringTy]
-               tupSndTy = Ghc.stringTy
-               tupTy = Ghc.mkTyConApp Ghc.maybeTyCon
-                       [Ghc.mkTupleTy Ghc.Boxed [tupFstTy, tupSndTy]]
-               expr = Ghc.mkNothingExpr tupTy
+           let expr = Ghc.mkNothingExpr Ghc.anyTy
            pure $ Ghc.TcPluginOk [(Ghc.EvExpr expr, w)] []
     _ -> pure $ Ghc.TcPluginOk [] []
 tcPluginSolver _ _ _ = pure $ Ghc.TcPluginOk [] []
