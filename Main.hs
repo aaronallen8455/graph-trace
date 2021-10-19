@@ -3,30 +3,36 @@
 
 import Debug
 
-main :: IO ()
+main :: Debug => IO ()
 main = do
   test
-  putStrLn "end"
-
+  andAnother
+  test
 
 test :: DebugKey "blah" => IO ()
 test = do
-  -- trace "test"
+  andAnother
+  trace "test" pure ()
   inWhere
-  let inLet :: IO ()
+  let inLet :: Debug => IO ()
       inLet = do
         letWhere
+        another
           where letWhere = trace "hello" pure ()
   inLet
   another
+  trace "leaving" pure ()
     where
-      inWhere :: IO ()
+      inWhere :: Debug => IO ()
       inWhere = do
         innerWhere
           where innerWhere = trace "innerWhere" pure ()
 
 another :: Debug => IO ()
 another = trace "another" pure ()
+
+andAnother :: Debug => IO ()
+andAnother = trace "hello!" pure ()
 
 -- test :: (?x :: String) => IO ()
 -- test = print ?x

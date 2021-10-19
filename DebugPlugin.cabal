@@ -38,3 +38,11 @@ executable exe
                      , debug-plugin
   -- hs-source-dirs:
   default-language:    Haskell2010
+
+executable debug-visualizer
+  default-language: Haskell2010
+  main-is: Main.hs
+  build-depends: base
+               , debug-plugin
+               , containers
+  hs-source-dirs: debug-visualizer
