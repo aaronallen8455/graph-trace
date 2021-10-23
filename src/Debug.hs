@@ -115,45 +115,6 @@ plugin =
     , Ghc.renamedResultAction = const renamedResultAction
     }
 
--- Now that the IP is being updated correctly, will need to start thinking
--- about how best to construct and emit the events (for both tracing and on
--- function entry). What sort of UI should be used to construct and display
--- the graph? graphviz? whatever ghcviz uses?
--- Looks like graphviz is a good starting point. Can use the "record" shape
--- with segmented labels to show the history of a particular function call
--- with edges pointing out to child function calls.
--- Should use HTML-like labels instead
--- Only the entry events needs to emit the predecessor ID and header info,
--- trace messages just emit the function's id along with the message.
--- How should emission occur? Would be nice to write to a file but will
--- interleaving output work with that? does the file lock when one thread is
--- writing to it so that another thread trying to write will have to wait?
--- appendFile seems like the best bet.
--- This will not work with concurrency. Instead will need to have an MVar to
--- restrict access to the file. But how will this global state be introduced?
--- It would need to be shared across all modules. That does not seem possible.
--- Will need to have multiple files - at a minimum one per module and then have
--- a shared global MVar declaration added to that module.
--- Having one file per function would be way too many files, so it has to be on
--- a per module basis.
--- So the plan is:
--- Add a toplevel binding to create an MVar with unsafePerformIO. It needs to
--- have a noInline pragma. Is it possible to add that as part of the parsed
--- AST? Probably need to do it as part of a parse result plugin rather than
--- a rename result action. The pragmas are found in the Sig type
--- For starters, would be easiest to have a top level MVar in the plugin module
--- that controls access to the file handle and only have a single file. This is
--- not ideal though because there could be high contention for this MVar.
--- Could potentially split up along module lines using something like the technique
--- described above although then it becomes essential to record the time stamp
--- of all events so that the order of occurrence can be reconstructed.
--- What should written to the file for each event?
--- for the entry event:
--- entry|module|functionName|invocationId|parentName|parentId(optional)\n
--- trace|functionName|invocationId|message\n
--- statement within each guard rather than in the body (but only if there are
--- existing guards?)
-
 renamedResultAction :: Ghc.TcGblEnv -> Ghc.HsGroup Ghc.GhcRn
                     -> Ghc.TcM (Ghc.TcGblEnv, Ghc.HsGroup Ghc.GhcRn)
 renamedResultAction tcGblEnv
@@ -334,10 +295,6 @@ addLetToWhereBinds nameMap whereBindName
            grhs{ Ghc.grhssLocalBinds = Ghc.L whereLoc newWhereBinds }
        }
 
--- TODO as part of the let binding placed in the body of a function, should
--- emit an event for entry into a function. We need to know about function ids
--- even if no trace is used within the body.
-
 -- | Add a where bind for the new value of the IP, then add let bindings to the
 -- front of each GRHS to set the new value of the IP in that scope.
 modifyMatch
@@ -441,7 +398,6 @@ modifyTyClGroup
   -> Ghc.TyClGroup Ghc.GhcRn
   -> Ghc.TcM (Ghc.TyClGroup Ghc.GhcRn)
 modifyTyClGroup debugName debugKeyName entryName
--- TODO modify default implementations
   tyClGroup@Ghc.TyClGroup{ Ghc.group_instds = instances
                          , Ghc.group_tyclds = tyCls } = do
     let modifyInstance c@Ghc.ClsInstD{ Ghc.cid_inst = inst } = do
@@ -563,14 +519,6 @@ mkNewIpExpr newKey = do
   (exprRn, _) <- Ghc.rnLExpr exprPs
 
   pure exprRn
-
--- Need to modify let bindings as well. And what going recursively into where
--- and let bindings? a where binding can have its own where clause etc.
--- Could do a syb recursion that stops when a function is found that we have
--- a name in the map for.
--- Let bindings don't matter
--- What about where clauses of let bindings? Will need to recurse into GRH
--- as well as local binds? Yes
 
 emitEntryEvent
   :: Ghc.Name
