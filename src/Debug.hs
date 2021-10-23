@@ -72,6 +72,8 @@ import qualified GHC.Utils.Outputable as Ghc
 import           Debug.Internal.Types
 import qualified Debug.Internal.Types as DT
 
+import qualified Debug.Trace as D
+
 logFilePath :: FilePath
 logFilePath = "debug_log.txt"
 
@@ -148,7 +150,7 @@ plugin =
 -- for the entry event:
 -- entry|module|functionName|invocationId|parentName|parentId(optional)\n
 -- trace|functionName|invocationId|message\n
--- TODO what about class methods?
+-- TODO what about class methods? Will need to fix this
 -- TODO what about traces places in guards? Will probably need to put the let
 -- statement within each guard rather than in the body (but only if there are
 -- existing guards?)
@@ -160,6 +162,7 @@ renamedResultAction tcGblEnv
     hsGroup@Ghc.HsGroup
       { Ghc.hs_valds =
           Ghc.XValBindsLR (Ghc.NValBinds binds sigs)
+      , Ghc.hs_tyclds = tyClGroups
       }
     = do
   hscEnv <- Ghc.getTopEnv
@@ -185,7 +188,14 @@ renamedResultAction tcGblEnv
     Syb.mkM (modifyBinding nameMap entryName)
       `Syb.everywhereM` binds
 
-  pure (tcGblEnv, hsGroup { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs })
+  tyClGroups' <-
+    traverse
+      (modifyTyClGroup debugPredName debugKeyPredName entryName)
+      tyClGroups
+
+  pure (tcGblEnv, hsGroup { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs
+                          , Ghc.hs_tyclds = tyClGroups'
+                          })
 renamedResultAction tcGblEnv group = pure (tcGblEnv, group)
 
 -- | If a sig contains the Debug constraint, get the name of the corresponding
@@ -201,6 +211,15 @@ sigUsesDebugPred
 sigUsesDebugPred debugPredName debugKeyPredName
   sig@(Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
     (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))) =
+      let mKey = listToMaybe
+           $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
+                      (Ghc.unLoc <$> ctx)
+       in case mKey of
+            Nothing -> mempty
+            Just key -> M.fromList $ zip (Ghc.unLoc <$> lNames) (repeat key)
+sigUsesDebugPred debugPredName debugKeyPredName
+  sig@(Ghc.ClassOpSig _ _ lNames (Ghc.HsIB _
+    (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _)))) =
       let mKey = listToMaybe
            $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
                       (Ghc.unLoc <$> ctx)
@@ -310,7 +329,7 @@ addLetToWhereBinds nameMap whereBindName
           Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
             let binds' =
                   fmap (updateDebugIPInBinds nameMap whereBindName)
-                       binds
+                   <$> binds
              in Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds' sigs))
           _ -> whereBinds
    in m{ Ghc.m_grhss =
@@ -388,10 +407,10 @@ modifyMatch nameMap whereBindExpr emitEntryName match = do
 updateDebugIPInBinds
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.Name
-  -> (Ghc.RecFlag, Ghc.LHsBinds Ghc.GhcRn)
-  -> (Ghc.RecFlag, Ghc.LHsBinds Ghc.GhcRn)
-updateDebugIPInBinds nameMap whereVarName (rec, binds)
-  = (rec, fmap updateBind <$> binds)
+  -> Ghc.LHsBinds Ghc.GhcRn
+  -> Ghc.LHsBinds Ghc.GhcRn
+updateDebugIPInBinds nameMap whereVarName binds
+  = fmap updateBind <$> binds
     where
       updateBind :: Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
       updateBind b@Ghc.FunBind{ Ghc.fun_matches = m@Ghc.MG{ Ghc.mg_alts = alts }
@@ -406,6 +425,59 @@ updateDebugIPInBinds nameMap whereVarName (rec, binds)
         = m{Ghc.m_grhss =
               g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
            }
+
+modifyTyClGroup
+  :: Ghc.Name -- ^ Debug name
+  -> Ghc.Name -- ^ DebugKey name
+  -> Ghc.Name -- ^ entry name
+  -> Ghc.TyClGroup Ghc.GhcRn
+  -> Ghc.TcM (Ghc.TyClGroup Ghc.GhcRn)
+modifyTyClGroup debugName debugKeyName entryName
+-- TODO modify default implementations
+  g@Ghc.TyClGroup{ Ghc.group_instds = instances, Ghc.group_tyclds = tyCls } = do
+    let modifyInstance c@Ghc.ClsInstD{ Ghc.cid_inst = inst } = do
+          inst' <-
+            modifyClsInstDecl tyClNameMap debugName debugKeyName entryName inst
+          pure c { Ghc.cid_inst = inst' }
+    instances' <- (traverse . traverse) modifyInstance instances
+    pure g { Ghc.group_instds = instances' }
+  where
+    maybeClassDecl c@Ghc.ClassDecl{} = Just c
+    maybeClassDecl _ = Nothing
+    -- why is this not finding anything?
+    tyClNameMap =
+      foldMap
+          ( foldMap (sigUsesDebugPred debugName debugKeyName . Ghc.unLoc)
+          . Ghc.tcdSigs
+          )
+      $ mapMaybe (maybeClassDecl . Ghc.unLoc) tyCls
+
+
+-- | Modify bindings for a type class instance declaration. If there are instance
+-- sigs, they override entries in the map generated from the type class decl.
+-- This map will be empty if the class is not defined beside the instances,
+-- therefore instance sigs are necessary to ensure that debugging occurs on
+-- class method invocations.
+modifyClsInstDecl
+  :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  -> Ghc.Name -- ^ Debug name
+  -> Ghc.Name -- ^ DebugKey name
+  -> Ghc.Name -- ^ entry name
+  -> Ghc.ClsInstDecl Ghc.GhcRn
+  -> Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
+modifyClsInstDecl nameMap debugName debugPredName entryName
+    c@Ghc.ClsInstDecl{ Ghc.cid_binds = binds , Ghc.cid_sigs = sigs }
+      = do
+  let overrides =
+        foldMap (sigUsesDebugPred debugName debugPredName . Ghc.unLoc)
+                sigs
+      nameMap' = overrides <> nameMap
+
+  newBinds <-
+    Syb.mkM (modifyBinding nameMap' entryName)
+      `Syb.everywhereM` binds
+
+  pure c { Ghc.cid_binds = newBinds }
 
 -- | Produce the contents of the where binding that contains the new debug IP
 -- value, generated by creating a new ID and pairing it with the old one.
@@ -508,7 +580,7 @@ isDebuggerIpCt _ = False
 
 tcPluginSolver :: Ghc.TcPluginSolver
 tcPluginSolver [] [] wanted = do
-  -- Ghc.tcPluginIO . putStrLn $ ppr (wanted, given, derived)
+  --Ghc.tcPluginIO . putStrLn $ ppr wanted
   case filter isDebuggerIpCt wanted of
 
     [w]

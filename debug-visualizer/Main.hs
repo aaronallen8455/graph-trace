@@ -45,7 +45,8 @@ buildGraph = foldr build mempty where
   build (DT.TraceEvent tag msg)
     = M.insertWith (<>) (mkKey tag) [Message msg]
   build (DT.EntryEvent curTag (Just prevTag))
-    = M.insertWith (<>) (mkKey prevTag) [Edge $ mkKey curTag]
+    = M.insertWith (<>) (mkKey curTag) []
+    . M.insertWith (<>) (mkKey prevTag) [Edge $ mkKey curTag]
   build (DT.EntryEvent curTag Nothing)
     = M.insertWith (<>) (mkKey curTag) []
   mkKey (DT.DT invId eKey) = (invId, either id id eKey)
@@ -54,7 +55,7 @@ graphToDot :: M.Map (Word, String) [NodeEntry] -> String
 graphToDot graph = header <> M.foldlWithKey' doNode "" graph <> "}"
   where
     header :: String
-    header = "digraph structs {\nnode [shape=plaintext]\n"
+    header = "digraph {\nnode [shape=plaintext]\n"
     doNode acc key entries =
       let (cells, edges, _) = foldr doEntry ([], [], cycle edgeColors) (zip entries [1..])
        in tableStart
