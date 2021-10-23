@@ -32,7 +32,8 @@ library
 
 executable exe
   main-is:             Main.hs
-  -- other-modules:
+  hs-source-dirs: exe
+  other-modules: Class
   -- other-extensions:
   build-depends:       base
                      , debug-plugin

@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE KindSignatures #-}
@@ -109,7 +110,7 @@ entry x =
 plugin :: Ghc.Plugin
 plugin =
   Ghc.defaultPlugin
-    { Ghc.pluginRecompile = Ghc.purePlugin
+    { Ghc.pluginRecompile = Ghc.purePlugin -- is this actually pure?
     , Ghc.tcPlugin = \_ -> Just tcPlugin
     , Ghc.renamedResultAction = const renamedResultAction
     }
@@ -150,11 +151,8 @@ plugin =
 -- for the entry event:
 -- entry|module|functionName|invocationId|parentName|parentId(optional)\n
 -- trace|functionName|invocationId|message\n
--- TODO what about class methods? Will need to fix this
--- TODO what about traces places in guards? Will probably need to put the let
 -- statement within each guard rather than in the body (but only if there are
 -- existing guards?)
--- TODO will need to have NOINLINE pragmas on all the trace definitions
 
 renamedResultAction :: Ghc.TcGblEnv -> Ghc.HsGroup Ghc.GhcRn
                     -> Ghc.TcM (Ghc.TcGblEnv, Ghc.HsGroup Ghc.GhcRn)
@@ -403,7 +401,9 @@ modifyMatch nameMap whereBindExpr emitEntryName match = do
                  }
              }
 
--- | Used to add the let binding to where binds
+-- | Looks for function bindings that are known to have a debug constraint and
+-- then updates the definitions of those functions to add the special let
+-- statement referencing the where binding.
 updateDebugIPInBinds
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.Name
@@ -426,6 +426,14 @@ updateDebugIPInBinds nameMap whereVarName binds
               g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
            }
 
+-- | For a group containing class instances and declarations, find method
+-- signatures that contain debug constraints, then modify the instance definitions
+-- of those functions to add instrumentation.
+-- TODO what about where bindings within method definitions (done)? Is this a more general
+-- problem where only top level functions with Debug constraints are recursively checked
+-- for where bindings that have debug constraints? Yes, where bound functions
+-- inside of functions that are not marked for debug will not be treated. Is this
+-- really a problem though?
 modifyTyClGroup
   :: Ghc.Name -- ^ Debug name
   -> Ghc.Name -- ^ DebugKey name
@@ -434,17 +442,16 @@ modifyTyClGroup
   -> Ghc.TcM (Ghc.TyClGroup Ghc.GhcRn)
 modifyTyClGroup debugName debugKeyName entryName
 -- TODO modify default implementations
-  g@Ghc.TyClGroup{ Ghc.group_instds = instances, Ghc.group_tyclds = tyCls } = do
+  tyClGroup@Ghc.TyClGroup{ Ghc.group_instds = instances, Ghc.group_tyclds = tyCls } = do
     let modifyInstance c@Ghc.ClsInstD{ Ghc.cid_inst = inst } = do
           inst' <-
             modifyClsInstDecl tyClNameMap debugName debugKeyName entryName inst
           pure c { Ghc.cid_inst = inst' }
     instances' <- (traverse . traverse) modifyInstance instances
-    pure g { Ghc.group_instds = instances' }
+    pure tyClGroup { Ghc.group_instds = instances' }
   where
     maybeClassDecl c@Ghc.ClassDecl{} = Just c
     maybeClassDecl _ = Nothing
-    -- why is this not finding anything?
     tyClNameMap =
       foldMap
           ( foldMap (sigUsesDebugPred debugName debugKeyName . Ghc.unLoc)
@@ -452,12 +459,7 @@ modifyTyClGroup debugName debugKeyName entryName
           )
       $ mapMaybe (maybeClassDecl . Ghc.unLoc) tyCls
 
-
--- | Modify bindings for a type class instance declaration. If there are instance
--- sigs, they override entries in the map generated from the type class decl.
--- This map will be empty if the class is not defined beside the instances,
--- therefore instance sigs are necessary to ensure that debugging occurs on
--- class method invocations.
+-- | Modify bindings for a type class instance declaration.
 modifyClsInstDecl
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.Name -- ^ Debug name
@@ -465,19 +467,37 @@ modifyClsInstDecl
   -> Ghc.Name -- ^ entry name
   -> Ghc.ClsInstDecl Ghc.GhcRn
   -> Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
-modifyClsInstDecl nameMap debugName debugPredName entryName
-    c@Ghc.ClsInstDecl{ Ghc.cid_binds = binds , Ghc.cid_sigs = sigs }
+modifyClsInstDecl nameMap debugName debugKeyName entryName
+    inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds, Ghc.cid_sigs = sigs }
       = do
-  let overrides =
-        foldMap (sigUsesDebugPred debugName debugPredName . Ghc.unLoc)
-                sigs
-      nameMap' = overrides <> nameMap
+
+  -- This is will collect names from inner where bound functions as well as
+  -- instance signatures which might want to override the signature from the
+  -- class method definition.
+  let getSigName (Ghc.L _ sig@(Ghc.TypeSig _ names _))
+        = let hasDebug = sigUsesDebugPred debugName debugKeyName sig
+           in if M.null hasDebug
+                 then M.fromList $ (Ghc.unLoc <$> names) `zip` repeat Nothing
+                 else hasDebug
+      getSigName _ = mempty
+      allSigNames = foldMap getSigName sigs
+
+      getMethodName (Ghc.FunBind _ (Ghc.L _ name) _ _) = M.singleton name Nothing
+      getMethodName _ = mempty
+      allMethodNames = (foldMap . foldMap) getMethodName binds
+
+      innerBindNames =
+        Syb.everything M.union
+          (Syb.mkQ mempty $ sigUsesDebugPred debugName debugKeyName)
+          binds
+
+      nameMap' = innerBindNames <> allSigNames <> nameMap <> allMethodNames
 
   newBinds <-
     Syb.mkM (modifyBinding nameMap' entryName)
       `Syb.everywhereM` binds
 
-  pure c { Ghc.cid_binds = newBinds }
+  pure inst { Ghc.cid_binds = newBinds }
 
 -- | Produce the contents of the where binding that contains the new debug IP
 -- value, generated by creating a new ID and pairing it with the old one.
@@ -544,8 +564,8 @@ updateDebugIPInGRHS whereBindName (Ghc.GRHS x guards body)
                 [ Ghc.noLoc $ Ghc.IPBind
                     Ghc.NoExtField
                     (Left . Ghc.noLoc $ Ghc.HsIPName "_debug_ip")
-                    (Ghc.noLoc $ Ghc.HsVar Ghc.NoExtField
-                      (Ghc.noLoc whereBindName)
+                    (Ghc.noLoc . Ghc.HsVar Ghc.NoExtField
+                      $ Ghc.noLoc whereBindName
                     )
                 ]
 
