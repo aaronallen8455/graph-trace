@@ -1,6 +1,5 @@
-{-# LANGUAGE ImplicitParams #-}
 {-# OPTIONS_GHC -fplugin=Debug #-}
-{-# OPTIONS_GHC -ddump-rn-ast #-}
+--{-# OPTIONS_GHC -ddump-rn-ast #-}
 
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE InstanceSigs #-}
@@ -46,7 +45,7 @@ class Classy a where
 
 instance Classy Int where
   classy :: DebugKey "hmm" => Int -> String
-  classy | let ?_debug_ip = Nothing = show
+  classy = show
 
 
 -- test :: (?x :: String) => IO ()

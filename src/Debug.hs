@@ -526,39 +526,33 @@ emitEntryEvent emitEntryName (Ghc.GRHS x guards body) =
       (Ghc.noLoc . Ghc.HsVar Ghc.NoExtField $ Ghc.noLoc emitEntryName)
       body
 
+-- | Given the name of the variable to assign to the debug IP, create a let
+-- expression as a guard statement that updates the IP in that scope.
 updateDebugIPInGRHS
   :: Ghc.Name
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
 updateDebugIPInGRHS whereBindName (Ghc.GRHS x guards body)
-  = Ghc.GRHS x guards (updateDebugIPInExpr whereBindName body)
-
--- | Given the name of the variable to assign to the debug IP, create a let
--- expression that updates the IP in that scope.
-updateDebugIPInExpr
-  :: Ghc.Name
-  -> Ghc.LHsExpr Ghc.GhcRn
-  -> Ghc.LHsExpr Ghc.GhcRn
-updateDebugIPInExpr whereBindName
-  = Ghc.noLoc
-  . Ghc.HsLet Ghc.NoExtField
-      ( Ghc.noLoc $ Ghc.HsIPBinds
-          Ghc.NoExtField
-          ( Ghc.IPBinds Ghc.NoExtField
-              [ Ghc.noLoc $ Ghc.IPBind
-                  Ghc.NoExtField
-                  (Left . Ghc.noLoc $ Ghc.HsIPName "_debug_ip")
-                  (Ghc.noLoc $ Ghc.HsVar Ghc.NoExtField
-                    (Ghc.noLoc whereBindName)
-                  )
-              ]
-          )
-      )
+  = Ghc.GRHS x (ipUpdateGuard : guards) body
+  where
+    ipUpdateGuard =
+      Ghc.noLoc $
+        Ghc.LetStmt Ghc.NoExtField $
+          Ghc.noLoc $
+            Ghc.HsIPBinds Ghc.NoExtField $
+              Ghc.IPBinds Ghc.NoExtField
+                [ Ghc.noLoc $ Ghc.IPBind
+                    Ghc.NoExtField
+                    (Left . Ghc.noLoc $ Ghc.HsIPName "_debug_ip")
+                    (Ghc.noLoc $ Ghc.HsVar Ghc.NoExtField
+                      (Ghc.noLoc whereBindName)
+                    )
+                ]
 
 tcPlugin :: Ghc.TcPlugin
 tcPlugin =
   Ghc.TcPlugin
-    { Ghc.tcPluginInit = pure () -- Ghc.tcPluginIO $ newIORef False
+    { Ghc.tcPluginInit = pure ()
     , Ghc.tcPluginStop = \_ -> pure ()
     , Ghc.tcPluginSolve = const tcPluginSolver
     }
