@@ -442,13 +442,20 @@ modifyTyClGroup
   -> Ghc.TcM (Ghc.TyClGroup Ghc.GhcRn)
 modifyTyClGroup debugName debugKeyName entryName
 -- TODO modify default implementations
-  tyClGroup@Ghc.TyClGroup{ Ghc.group_instds = instances, Ghc.group_tyclds = tyCls } = do
+  tyClGroup@Ghc.TyClGroup{ Ghc.group_instds = instances
+                         , Ghc.group_tyclds = tyCls } = do
     let modifyInstance c@Ghc.ClsInstD{ Ghc.cid_inst = inst } = do
           inst' <-
             modifyClsInstDecl tyClNameMap debugName debugKeyName entryName inst
           pure c { Ghc.cid_inst = inst' }
     instances' <- (traverse . traverse) modifyInstance instances
-    pure tyClGroup { Ghc.group_instds = instances' }
+
+    tyCls' <-
+      (traverse . traverse)
+        (modifyDefaultTyClImpl tyClNameMap debugName debugKeyName entryName)
+        tyCls
+
+    pure tyClGroup { Ghc.group_instds = instances', Ghc.group_tyclds = tyCls' }
   where
     maybeClassDecl c@Ghc.ClassDecl{} = Just c
     maybeClassDecl _ = Nothing
@@ -458,6 +465,31 @@ modifyTyClGroup debugName debugKeyName entryName
           . Ghc.tcdSigs
           )
       $ mapMaybe (maybeClassDecl . Ghc.unLoc) tyCls
+
+-- TODO Use a context Reader to pass around names and map
+
+-- | Instrument the default implementations in a class decl
+modifyDefaultTyClImpl
+  :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  -> Ghc.Name -- ^ Debug name
+  -> Ghc.Name -- ^ DebugKey name
+  -> Ghc.Name -- ^ entry name
+  -> Ghc.TyClDecl Ghc.GhcRn
+  -> Ghc.TcM (Ghc.TyClDecl Ghc.GhcRn)
+modifyDefaultTyClImpl nameMap debugName debugKeyName entryName
+    cd@Ghc.ClassDecl { Ghc.tcdMeths = meths } = do
+  let innerBindNames =
+        Syb.everything M.union
+          (Syb.mkQ mempty $ sigUsesDebugPred debugName debugKeyName)
+          meths
+      nameMap' = innerBindNames <> nameMap
+
+  newMeths <-
+    Syb.mkM (modifyBinding nameMap' entryName)
+      `Syb.everywhereM` meths
+
+  pure cd { Ghc.tcdMeths = newMeths }
+modifyDefaultTyClImpl _ _ _ _ x = pure x
 
 -- | Modify bindings for a type class instance declaration.
 modifyClsInstDecl
@@ -482,6 +514,10 @@ modifyClsInstDecl nameMap debugName debugKeyName entryName
       getSigName _ = mempty
       allSigNames = foldMap getSigName sigs
 
+      -- Include all method names so that method definitions are instrumented
+      -- regardless of if there is an instance or decl sig. This is because
+      -- the class definition may reside in a different module and this will not
+      -- be available in the TyClGroup.
       getMethodName (Ghc.FunBind _ (Ghc.L _ name) _ _) = M.singleton name Nothing
       getMethodName _ = mempty
       allMethodNames = (foldMap . foldMap) getMethodName binds

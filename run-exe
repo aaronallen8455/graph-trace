@@ -1,0 +1,6 @@
+#!/bin/bash
+rm debug_log.txt
+cabal v2-build
+cabal v2-exec exe
+cabal v2-exec debug-visualizer
+dot -Tsvg debug.dot > test.svg
