@@ -87,6 +87,8 @@ edgeColors =
   , "lightgoldenrod"
   , "lightcoral"
   , "lightsteelblue"
-  , "mediumorchid1"
+  , "plum"
   , "mediumturquoise"
+  , "navajowhite"
+  , "thistle"
   ]

@@ -107,22 +107,32 @@ entry x =
       pure x
 {-# NOINLINE entry  #-}
 
+-- TODO include an option that makes all functions that have signatures get
+-- automatically instrumented.
+-- If the option is engaged, will modify all fun bind signatures in the AST to
+-- include the Debug constraint. Not easy to discriminate on fun binds so will
+-- just target val binds and modify the list of singatures therein.
+-- Then the guard on membership in the map will be removed. But that's not enough
+-- because it would include bindings that don't have signatures. Maybe we just
+-- need to collect all the signatures anyways. So then the only change would be
+-- to add a pass that adds the constraint to all signatures. That is simple
+-- enough but performance may start becoming rather poor.
+
 plugin :: Ghc.Plugin
 plugin =
   Ghc.defaultPlugin
     { Ghc.pluginRecompile = Ghc.purePlugin -- is this actually pure?
     , Ghc.tcPlugin = \_ -> Just tcPlugin
-    , Ghc.renamedResultAction = const renamedResultAction
+    , Ghc.renamedResultAction = renamedResultAction
     }
 
-renamedResultAction :: Ghc.TcGblEnv -> Ghc.HsGroup Ghc.GhcRn
-                    -> Ghc.TcM (Ghc.TcGblEnv, Ghc.HsGroup Ghc.GhcRn)
-renamedResultAction tcGblEnv
-    hsGroup@Ghc.HsGroup
-      { Ghc.hs_valds =
-          Ghc.XValBindsLR (Ghc.NValBinds binds sigs)
-      , Ghc.hs_tyclds = tyClGroups
-      }
+renamedResultAction
+  :: [Ghc.CommandLineOption]
+  -> Ghc.TcGblEnv
+  -> Ghc.HsGroup Ghc.GhcRn
+  -> Ghc.TcM (Ghc.TcGblEnv, Ghc.HsGroup Ghc.GhcRn)
+renamedResultAction cmdLineOptions tcGblEnv
+    hsGroup@Ghc.HsGroup{Ghc.hs_valds = Ghc.XValBindsLR{}}
     = do
   hscEnv <- Ghc.getTopEnv
 
@@ -136,11 +146,21 @@ renamedResultAction tcGblEnv
   debugKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugKey")
   entryName <- Ghc.lookupOrig debugModule (Ghc.mkVarOcc "entry")
 
+  -- If the "debug-all" option is passed, add the Debug predicate to all
+  -- function signatures.
+  let hsGroup'@Ghc.HsGroup
+        { Ghc.hs_valds = Ghc.XValBindsLR (Ghc.NValBinds binds sigs)
+        , Ghc.hs_tyclds = tyClGroups
+        } = if "debug-all" `elem` cmdLineOptions
+            then Syb.mkT (addConstraintToSig debugPredName debugKeyPredName)
+                   `Syb.everywhere` hsGroup
+            else hsGroup
+
   -- find all uses of debug predicates in type signatures
   let nameMap =
         Syb.everything M.union
           (Syb.mkQ mempty $ sigUsesDebugPred debugPredName debugKeyPredName)
-          hsGroup
+          hsGroup'
 
   -- Find the functions corresponding to those signatures and modify their definition.
   binds' <-
@@ -152,10 +172,50 @@ renamedResultAction tcGblEnv
       (modifyTyClGroup debugPredName debugKeyPredName entryName)
       tyClGroups
 
-  pure (tcGblEnv, hsGroup { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs
-                          , Ghc.hs_tyclds = tyClGroups'
-                          })
-renamedResultAction tcGblEnv group = pure (tcGblEnv, group)
+  pure ( tcGblEnv
+       , hsGroup' { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs
+                  , Ghc.hs_tyclds = tyClGroups'
+                  }
+       )
+renamedResultAction _ tcGblEnv group = pure (tcGblEnv, group)
+
+-- | Matches on type signatures in order to add the constraint to them.
+addConstraintToSig
+  :: Ghc.Name
+  -> Ghc.Name
+  -> Ghc.Sig Ghc.GhcRn
+  -> Ghc.Sig Ghc.GhcRn
+addConstraintToSig debugPred debugKeyPred
+  (Ghc.TypeSig x1 lNames (Ghc.HsWC x2 sig)) =
+    Ghc.TypeSig x1 lNames (Ghc.HsWC x2
+      (addConstraintToSigType debugPred debugKeyPred sig))
+addConstraintToSig debugPred debugKeyPred
+  (Ghc.ClassOpSig x1 b lNames sig) =
+    Ghc.ClassOpSig x1 b lNames
+      (addConstraintToSigType debugPred debugKeyPred sig)
+addConstraintToSig _ _ s = s
+
+-- | Adds the 'Debug' constraint to a signature if it doesn't already have it
+-- as the first constraint in the context.
+addConstraintToSigType
+  :: Ghc.Name
+  -> Ghc.Name
+  -> Ghc.LHsSigType Ghc.GhcRn
+  -> Ghc.LHsSigType Ghc.GhcRn
+addConstraintToSigType debugPred debugKeyPred sig@Ghc.HsIB{ Ghc.hsib_body = t } =
+  sig{ Ghc.hsib_body = fmap go t }
+    where
+      pred = Ghc.noLoc $ Ghc.HsTyVar Ghc.NoExtField Ghc.NotPromoted (Ghc.noLoc debugPred)
+      go ty =
+        case ty of
+          Ghc.HsForAllTy x tele body -> Ghc.HsForAllTy x tele $ go <$> body
+          q@(Ghc.HsQualTy x ctx body)
+            | _ : _ <-
+                mapMaybe (checkForDebugPred debugPred debugKeyPred)
+                  (Ghc.unLoc $ map Ghc.unLoc <$> ctx)
+            -> q
+            | otherwise -> Ghc.HsQualTy x (fmap (pred :) ctx) body
+          _ -> Ghc.HsQualTy Ghc.NoExtField (Ghc.noLoc [pred]) (Ghc.noLoc ty)
 
 -- | If a sig contains the Debug constraint, get the name of the corresponding
 -- binding.
@@ -269,6 +329,11 @@ mkWhereBinding whereBindName whereBindExpr =
 -- TODO as an optimization, it doesn't seem necessary to gather all the Names
 -- from the sigs all at once, can probably look at them when examining the
 -- where bound matches.
+-- The problem is that syb doesn't offer a way to include context when doing
+-- a modification and rolling it into a monadic context won't work because it
+-- is a bottom up transform. Would it be possible to use the 'somewhere' scheme
+-- and have it make recursive calls that include the extra context? What exactly
+-- does somewhere do? Doesn't seem like it'd work.
 
 -- | Add a let binding setting the new value of the IP to each where bound
 -- function that does not exist in the map.
@@ -471,9 +536,9 @@ modifyClsInstDecl tyClNameMap debugName debugKeyName entryName
           (Syb.mkQ mempty $ sigUsesDebugPred debugName debugKeyName)
           binds
 
-  -- only instrument the methods that have both a decl and instance signature
-  -- containing the predicate. Otherwise there are weird edge cases.
-      nameMap' = innerBindNames <> M.intersectionWith const allSigNames tyClNameMap
+      -- Instrumenting class methods only works if the method definition AND
+      -- the instance signature have the pred.
+      nameMap' = M.unions [innerBindNames, allSigNames, tyClNameMap]
 
   newBinds <-
     Syb.mkM (modifyBinding nameMap' entryName)

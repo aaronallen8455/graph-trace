@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -fplugin=Debug #-}
+{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
 --{-# OPTIONS_GHC -ddump-rn-ast #-}
 
 {-# LANGUAGE DataKinds #-}
@@ -7,13 +7,13 @@
 import Debug
 import           Class
 
-main :: Debug => IO ()
+main :: IO ()
 main = do
   test
   andAnother
   test
 
-test :: DebugKey "blah" => IO ()
+test :: IO ()
 test = do
   andAnother
   trace "test" pure ()
