@@ -8,3 +8,6 @@ class Show a => Classy a where
 
   deff :: Debug => a -> String
   deff = show
+
+class Show a => Classier a where
+  classier :: a -> String

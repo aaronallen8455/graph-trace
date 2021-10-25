@@ -19,6 +19,7 @@ test = do
   trace "test" pure ()
   putStrLn $ deff (I 3)
   putStrLn $ classy (I 4)
+  putStrLn $ classier (I 5)
   inWhere
   let inLet :: Debug => IO ()
       inLet = do
@@ -49,6 +50,9 @@ instance Classy I where
     where
       boo :: Debug => I -> String
       boo = trace "boohoo" show
+
+instance Classier I where
+  classier = show
 
 -- test :: (?x :: String) => IO ()
 -- test = print ?x

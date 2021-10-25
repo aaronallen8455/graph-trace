@@ -455,35 +455,25 @@ modifyClsInstDecl
   -> Ghc.Name -- ^ entry name
   -> Ghc.ClsInstDecl Ghc.GhcRn
   -> Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
-modifyClsInstDecl nameMap debugName debugKeyName entryName
+modifyClsInstDecl tyClNameMap debugName debugKeyName entryName
     inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds, Ghc.cid_sigs = sigs }
       = do
 
   -- This is will collect names from inner where bound functions as well as
   -- instance signatures which might want to override the signature from the
   -- class method definition.
-  let getSigName (Ghc.L _ sig@(Ghc.TypeSig _ names _))
-        = let hasDebug = sigUsesDebugPred debugName debugKeyName sig
-           in if M.null hasDebug
-                 then M.fromList $ (Ghc.unLoc <$> names) `zip` repeat Nothing
-                 else hasDebug
-      getSigName _ = mempty
+  let getSigName (Ghc.L _ sig)
+        = sigUsesDebugPred debugName debugKeyName sig
       allSigNames = foldMap getSigName sigs
-
-      -- Include all method names so that method definitions are instrumented
-      -- regardless of if there is an instance or decl sig. This is because
-      -- the class definition may reside in a different module and this will not
-      -- be available in the TyClGroup.
-      getMethodName (Ghc.FunBind _ (Ghc.L _ name) _ _) = M.singleton name Nothing
-      getMethodName _ = mempty
-      allMethodNames = (foldMap . foldMap) getMethodName binds
 
       innerBindNames =
         Syb.everything M.union
           (Syb.mkQ mempty $ sigUsesDebugPred debugName debugKeyName)
           binds
 
-      nameMap' = innerBindNames <> allSigNames <> nameMap <> allMethodNames
+  -- only instrument the methods that have both a decl and instance signature
+  -- containing the predicate. Otherwise there are weird edge cases.
+      nameMap' = innerBindNames <> M.intersectionWith const allSigNames tyClNameMap
 
   newBinds <-
     Syb.mkM (modifyBinding nameMap' entryName)
@@ -578,16 +568,20 @@ isDebuggerIpCt _ = False
 
 tcPluginSolver :: Ghc.TcPluginSolver
 tcPluginSolver [] [] wanted = do
-  --Ghc.tcPluginIO . putStrLn $ ppr wanted
   case filter isDebuggerIpCt wanted of
 
     [w]
       | Ghc.IPOccOrigin _ <- Ghc.ctl_origin . Ghc.ctev_loc $ Ghc.cc_ev w
       -> do
-        --Ghc.tcPluginIO . putStrLn . ppr $ Ghc.ctl_origin . Ghc.ctev_loc $ Ghc.cc_ev w
+        -- This occurs when the IP constraint is satisfied but a wanted still
+        -- gets emitted for the a use site of the IP variable (why?).
+        -- We don't want to touch this constraint because the value for the IP
+        -- should be inherited from the context.
         pure $ Ghc.TcPluginOk [] []
       | otherwise
       -> do
+           -- This occurs when the IP constraint is not satisfiable by the context.
+           -- Here we want to manually construct a value with which to satisfy it.
            let expr = Ghc.mkNothingExpr Ghc.anyTy
            pure $ Ghc.TcPluginOk [(Ghc.EvExpr expr, w)] []
     _ -> pure $ Ghc.TcPluginOk [] []
