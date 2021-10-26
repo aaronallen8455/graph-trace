@@ -27,6 +27,7 @@ library
                , containers
                , syb
                , template-haskell
+               , transformers
                , random
   hs-source-dirs:      src
 

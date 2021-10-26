@@ -19,6 +19,8 @@ import           Control.Applicative ((<|>))
 import           Control.Concurrent.MVar
 import           Control.Monad (guard)
 import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad.Trans.Class (lift)
+import           Control.Monad.Trans.State
 import           Data.Foldable
 import           Data.Functor.Const
 import qualified Data.Generics as Syb
@@ -126,6 +128,11 @@ entry x =
 -- like you can get the package name from the CallStack, so maybe that will
 -- work? Probably not since the MVar is defined in the plugin package.
 
+-- TODO Can use State monad to collect a Set of the Names that are visited in
+-- the main traversal so that the traversal for instrumenting where bindings
+-- can then check membership in the set and not process those functions twice.
+-- This should prevent the generated where bindings from being processed as well.
+
 plugin :: Ghc.Plugin
 plugin =
   Ghc.defaultPlugin
@@ -165,13 +172,13 @@ renamedResultAction cmdLineOptions tcGblEnv
             else hsGroup
 
   -- process value bindings
-  valBinds' <-
+  valBinds' <- (`evalStateT` S.empty) $
       Syb.mkM (modifyValBinds debugPredName debugKeyPredName entryName)
     `Syb.everywhereM`
       valBinds
 
   -- process type class decls and instances
-  tyClGroups' <-
+  tyClGroups' <- (`evalStateT` S.empty) $
       Syb.mkM (modifyClsInstDecl debugPredName debugKeyPredName entryName)
     `Syb.extM`
       modifyTyClDecl debugPredName debugKeyPredName entryName
@@ -205,7 +212,7 @@ modifyBinds
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.Name
   -> Ghc.LHsBinds Ghc.GhcRn
-  -> Ghc.TcM (Ghc.LHsBinds Ghc.GhcRn)
+  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.LHsBinds Ghc.GhcRn)
 modifyBinds nameMap entryName =
   (traverse . traverse)
     (modifyBinding nameMap entryName)
@@ -216,10 +223,11 @@ modifyValBinds
   -> Ghc.Name
   -> Ghc.Name
   -> Ghc.NHsValBindsLR Ghc.GhcRn
-  -> Ghc.TcM (Ghc.NHsValBindsLR Ghc.GhcRn)
+  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.NHsValBindsLR Ghc.GhcRn)
 modifyValBinds debugPred debugKeyPred entryName (Ghc.NValBinds binds sigs) = do
   let nameMap = collectNames debugPred debugKeyPred sigs
   binds' <- (traverse . traverse) (modifyBinds nameMap entryName) binds
+  modify' (S.union $ M.keysSet nameMap)
   pure $ Ghc.NValBinds binds' sigs
 
 -- | Instrument default method implementations in a type class declaration if
@@ -229,7 +237,7 @@ modifyTyClDecl
   -> Ghc.Name
   -> Ghc.Name
   -> Ghc.TyClDecl Ghc.GhcRn
-  -> Ghc.TcM (Ghc.TyClDecl Ghc.GhcRn)
+  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.TyClDecl Ghc.GhcRn)
 modifyTyClDecl debugPred debugKeyPred entryName
     cd@Ghc.ClassDecl { Ghc.tcdMeths = meths
                      , Ghc.tcdSigs = sigs
@@ -246,7 +254,7 @@ modifyClsInstDecl
   -> Ghc.Name -- ^ DebugKey name
   -> Ghc.Name -- ^ entry name
   -> Ghc.ClsInstDecl Ghc.GhcRn
-  -> Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
+  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
 modifyClsInstDecl debugName debugKeyName entryName
     inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds, Ghc.cid_sigs = sigs }
       = do
@@ -343,7 +351,7 @@ modifyBinding
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.Name
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
-  -> Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
+  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
 modifyBinding nameMap emitEntryName
   bnd@(Ghc.FunBind _ (Ghc.L _ name) mg@(Ghc.MG _ alts _) _)
     | Just mUserKey <- M.lookup name nameMap
@@ -352,7 +360,7 @@ modifyBinding nameMap emitEntryName
                   Nothing -> Left $ Ghc.getOccString name
                   Just k -> Right $ Ghc.unpackFS k
 
-      whereBindExpr <- mkNewIpExpr key
+      whereBindExpr <- lift $ mkNewIpExpr key
 
       newAlts <-
         (traverse . traverse . traverse)
@@ -405,11 +413,11 @@ mkWhereBinding whereBindName whereBindExpr =
 -- | Add a let binding setting the new value of the IP to each where bound
 -- function that does not exist in the map.
 addLetToWhereBinds
-  :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  :: S.Set Ghc.Name
   -> Ghc.Name
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-addLetToWhereBinds nameMap whereBindName
+addLetToWhereBinds visitedNames whereBindName
   m@Ghc.Match
     { Ghc.m_grhss =
         grhs@Ghc.GRHSs
@@ -419,7 +427,7 @@ addLetToWhereBinds nameMap whereBindName
         case whereBinds of
           Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
             let binds' =
-                  fmap (updateDebugIPInBinds nameMap whereBindName)
+                  fmap (updateDebugIPInBinds visitedNames whereBindName)
                    <$> binds
              in Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds' sigs))
           _ -> whereBinds
@@ -434,7 +442,7 @@ modifyMatch
   -> Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.Name
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-  -> Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
+  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
 modifyMatch nameMap whereBindExpr emitEntryName
     match@Ghc.Match
       { Ghc.m_grhss =
@@ -443,16 +451,17 @@ modifyMatch nameMap whereBindExpr emitEntryName
             , Ghc.grhssGRHSs = grhsList
             }
       } = do
-  whereBindName <- mkWhereBindName
+  whereBindName <- lift mkWhereBindName
+
+  visitedNames <- get
 
   -- only update the where bindings that don't have Debug
   -- predicates, those that do will be addressed via recursion.
   -- It is also necesarry to descend into potential recursive wheres
   -- but the recursion needs to stop if a known name is found.
   let stopCondition :: Ghc.HsBind Ghc.GhcRn -> Bool
-      --stopCondition (NValBinds _ sigs)
       stopCondition b@Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
-        = D.trace (ppr funName) M.member funName nameMap
+        = S.member funName visitedNames
 
       -- recurse entire the entire match to add let bindings to all where
       -- clauses, including those belonging to let-bound terms at any
@@ -465,7 +474,7 @@ modifyMatch nameMap whereBindExpr emitEntryName
               }
         } = Syb.everywhereBut -- TODO fix this
               (Syb.mkQ False stopCondition)
-              (Syb.mkT $ addLetToWhereBinds nameMap whereBindName)
+              (Syb.mkT $ addLetToWhereBinds visitedNames whereBindName)
               match
 
       ipValWhereBind = mkWhereBinding whereBindName whereBindExpr
@@ -502,18 +511,18 @@ modifyMatch nameMap whereBindExpr emitEntryName
 -- then updates the definitions of those functions to add the special let
 -- statement referencing the where binding.
 updateDebugIPInBinds
-  :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  :: S.Set Ghc.Name
   -> Ghc.Name
   -> Ghc.LHsBinds Ghc.GhcRn
   -> Ghc.LHsBinds Ghc.GhcRn
-updateDebugIPInBinds nameMap whereVarName binds
+updateDebugIPInBinds visitedNames whereVarName binds
   = fmap updateBind <$> binds
     where
       updateBind :: Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
       updateBind b@Ghc.FunBind{ Ghc.fun_matches = m@Ghc.MG{ Ghc.mg_alts = alts }
                               , Ghc.fun_id = Ghc.L _ funName
                               }
-        | funName `M.notMember` nameMap
+        | funName `S.notMember` visitedNames
         = b { Ghc.fun_matches =
               m { Ghc.mg_alts = (fmap . fmap . fmap) updateMatch alts }
             }

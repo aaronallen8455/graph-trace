@@ -6,5 +6,6 @@ mkShell {
   buildInputs = [
     haskell.compiler.ghc901
     cabal-install
+    graphviz
   ];
 }

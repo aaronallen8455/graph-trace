@@ -35,7 +35,9 @@ test = do
       inWhere :: Debug => IO ()
       inWhere = do
         innerWhere
-          where innerWhere = trace "innerWhere" pure ()
+          where
+            innerWhere :: Debug => IO ()
+            innerWhere = trace "innerWhere" pure ()
 
 another :: Debug => IO ()
 another
