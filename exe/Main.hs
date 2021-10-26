@@ -1,4 +1,5 @@
-{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
+--{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
+{-# OPTIONS_GHC -fplugin=Debug #-}
 --{-# OPTIONS_GHC -ddump-rn-ast #-}
 
 {-# LANGUAGE DataKinds #-}
@@ -7,18 +8,19 @@
 import Debug
 import           Class
 
-main :: IO ()
+main :: Debug => IO ()
 main = do
   test
   andAnother
   test
 
-test :: IO ()
+test :: Debug => IO ()
 test = do
   andAnother
   trace "test" pure ()
   putStrLn $ deff (I 3)
-  putStrLn $ classy (I 4)
+  x <- readLn
+  putStrLn $ classy (I x)
   putStrLn $ classier (I 5)
   inWhere
   let inLet :: Debug => IO ()
@@ -46,10 +48,11 @@ andAnother = trace "hello!" pure ()
 newtype I = I Int deriving Show
 
 instance Classy I where
+  classy :: Debug => I -> String
   classy = boo
     where
       boo :: Debug => I -> String
-      boo = trace "boohoo" show
+      boo i = trace (show i) "..."
 
 instance Classier I where
   classier = show

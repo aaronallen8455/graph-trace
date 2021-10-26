@@ -117,6 +117,14 @@ entry x =
 -- need to collect all the signatures anyways. So then the only change would be
 -- to add a pass that adds the constraint to all signatures. That is simple
 -- enough but performance may start becoming rather poor.
+-- Since the map should only be needed for a specific set of bindings, it
+-- doesn't need to be passed down recursively.
+
+-- TODO If more than one application is running at once, will need to use
+-- different names for log files. There may be a way to query what the name of
+-- the running application is, otherwise it could be a plugin argument. Looks
+-- like you can get the package name from the CallStack, so maybe that will
+-- work? Probably not since the MVar is defined in the plugin package.
 
 plugin :: Ghc.Plugin
 plugin =
@@ -149,35 +157,102 @@ renamedResultAction cmdLineOptions tcGblEnv
   -- If the "debug-all" option is passed, add the Debug predicate to all
   -- function signatures.
   let hsGroup'@Ghc.HsGroup
-        { Ghc.hs_valds = Ghc.XValBindsLR (Ghc.NValBinds binds sigs)
+        { Ghc.hs_valds = valBinds --Ghc.XValBindsLR (Ghc.NValBinds binds sigs)
         , Ghc.hs_tyclds = tyClGroups
         } = if "debug-all" `elem` cmdLineOptions
             then Syb.mkT (addConstraintToSig debugPredName debugKeyPredName)
                    `Syb.everywhere` hsGroup
             else hsGroup
 
-  -- find all uses of debug predicates in type signatures
-  let nameMap =
-        Syb.everything M.union
-          (Syb.mkQ mempty $ sigUsesDebugPred debugPredName debugKeyPredName)
-          hsGroup'
+  -- process value bindings
+  valBinds' <-
+      Syb.mkM (modifyValBinds debugPredName debugKeyPredName entryName)
+    `Syb.everywhereM`
+      valBinds
 
-  -- Find the functions corresponding to those signatures and modify their definition.
-  binds' <-
-    Syb.mkM (modifyBinding nameMap entryName)
-      `Syb.everywhereM` binds
-
+  -- process type class decls and instances
   tyClGroups' <-
-    traverse
-      (modifyTyClGroup debugPredName debugKeyPredName entryName)
+      Syb.mkM (modifyClsInstDecl debugPredName debugKeyPredName entryName)
+    `Syb.extM`
+      modifyTyClDecl debugPredName debugKeyPredName entryName
+    `Syb.extM`
+      modifyValBinds debugPredName debugKeyPredName entryName
+    `Syb.everywhereM`
       tyClGroups
 
   pure ( tcGblEnv
-       , hsGroup' { Ghc.hs_valds = Ghc.XValBindsLR $ Ghc.NValBinds binds' sigs
+       , hsGroup' { Ghc.hs_valds = valBinds'
                   , Ghc.hs_tyclds = tyClGroups'
                   }
        )
+
 renamedResultAction _ tcGblEnv group = pure (tcGblEnv, group)
+
+-- | Find all function names that have a type signature containing a debug pred.
+-- If the DebugKey pred is found, record its assigned string.
+collectNames
+  :: Ghc.Name
+  -> Ghc.Name
+  -> [Ghc.LSig Ghc.GhcRn]
+  -> M.Map Ghc.Name (Maybe Ghc.FastString)
+collectNames debugPred debugKeyPred =
+  (foldMap . foldMap)
+    (sigUsesDebugPred debugPred debugKeyPred)
+
+-- | Instrument a set of bindings given a Map containing the names of functions
+-- that should be modified.
+modifyBinds
+  :: M.Map Ghc.Name (Maybe Ghc.FastString)
+  -> Ghc.Name
+  -> Ghc.LHsBinds Ghc.GhcRn
+  -> Ghc.TcM (Ghc.LHsBinds Ghc.GhcRn)
+modifyBinds nameMap entryName =
+  (traverse . traverse)
+    (modifyBinding nameMap entryName)
+
+-- | Instrument value bindings that have a signature with a debug pred.
+modifyValBinds
+  :: Ghc.Name
+  -> Ghc.Name
+  -> Ghc.Name
+  -> Ghc.NHsValBindsLR Ghc.GhcRn
+  -> Ghc.TcM (Ghc.NHsValBindsLR Ghc.GhcRn)
+modifyValBinds debugPred debugKeyPred entryName (Ghc.NValBinds binds sigs) = do
+  let nameMap = collectNames debugPred debugKeyPred sigs
+  binds' <- (traverse . traverse) (modifyBinds nameMap entryName) binds
+  pure $ Ghc.NValBinds binds' sigs
+
+-- | Instrument default method implementations in a type class declaration if
+-- they contain a Debug pred.
+modifyTyClDecl
+  :: Ghc.Name
+  -> Ghc.Name
+  -> Ghc.Name
+  -> Ghc.TyClDecl Ghc.GhcRn
+  -> Ghc.TcM (Ghc.TyClDecl Ghc.GhcRn)
+modifyTyClDecl debugPred debugKeyPred entryName
+    cd@Ghc.ClassDecl { Ghc.tcdMeths = meths
+                     , Ghc.tcdSigs = sigs
+                     } = do
+  let nameMap = collectNames debugPred debugKeyPred sigs
+  newMeths <- modifyBinds nameMap entryName meths
+  pure cd { Ghc.tcdMeths = newMeths }
+modifyTyClDecl _ _ _ x = pure x
+
+-- | Instrument the method implementations in an type class instance if it has
+-- a signature containing a debug pred.
+modifyClsInstDecl
+  :: Ghc.Name -- ^ Debug name
+  -> Ghc.Name -- ^ DebugKey name
+  -> Ghc.Name -- ^ entry name
+  -> Ghc.ClsInstDecl Ghc.GhcRn
+  -> Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
+modifyClsInstDecl debugName debugKeyName entryName
+    inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds, Ghc.cid_sigs = sigs }
+      = do
+  let nameMap = collectNames debugName debugKeyName sigs
+  newBinds <- modifyBinds nameMap entryName binds
+  pure inst { Ghc.cid_binds = newBinds }
 
 -- | Matches on type signatures in order to add the constraint to them.
 addConstraintToSig
@@ -263,6 +338,7 @@ checkForDebugPred n nk (Ghc.HsParTy _ (Ghc.L _ ty)) = checkForDebugPred n nk ty
 checkForDebugPred _ _ _ = Nothing
 -- need a case for nested QualTy?
 
+-- | Instrument a binding if its name is in the Map.
 modifyBinding
   :: M.Map Ghc.Name (Maybe Ghc.FastString)
   -> Ghc.Name
@@ -326,15 +402,6 @@ mkWhereBinding whereBindName whereBindExpr =
    , Ghc.fun_tick = []
    }
 
--- TODO as an optimization, it doesn't seem necessary to gather all the Names
--- from the sigs all at once, can probably look at them when examining the
--- where bound matches.
--- The problem is that syb doesn't offer a way to include context when doing
--- a modification and rolling it into a monadic context won't work because it
--- is a bottom up transform. Would it be possible to use the 'somewhere' scheme
--- and have it make recursive calls that include the extra context? What exactly
--- does somewhere do? Doesn't seem like it'd work.
-
 -- | Add a let binding setting the new value of the IP to each where bound
 -- function that does not exist in the map.
 addLetToWhereBinds
@@ -368,7 +435,14 @@ modifyMatch
   -> Ghc.Name
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
-modifyMatch nameMap whereBindExpr emitEntryName match = do
+modifyMatch nameMap whereBindExpr emitEntryName
+    match@Ghc.Match
+      { Ghc.m_grhss =
+          grhs@Ghc.GRHSs
+            { Ghc.grhssLocalBinds = whereBinds
+            , Ghc.grhssGRHSs = grhsList
+            }
+      } = do
   whereBindName <- mkWhereBindName
 
   -- only update the where bindings that don't have Debug
@@ -376,8 +450,9 @@ modifyMatch nameMap whereBindExpr emitEntryName match = do
   -- It is also necesarry to descend into potential recursive wheres
   -- but the recursion needs to stop if a known name is found.
   let stopCondition :: Ghc.HsBind Ghc.GhcRn -> Bool
+      --stopCondition (NValBinds _ sigs)
       stopCondition b@Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
-        = M.member funName nameMap
+        = D.trace (ppr funName) M.member funName nameMap
 
       -- recurse entire the entire match to add let bindings to all where
       -- clauses, including those belonging to let-bound terms at any
@@ -388,7 +463,7 @@ modifyMatch nameMap whereBindExpr emitEntryName match = do
               { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds
               , Ghc.grhssGRHSs = grhsList
               }
-        } = Syb.everywhereBut
+        } = Syb.everywhereBut -- TODO fix this
               (Syb.mkQ False stopCondition)
               (Syb.mkT $ addLetToWhereBinds nameMap whereBindName)
               match
@@ -448,103 +523,7 @@ updateDebugIPInBinds nameMap whereVarName binds
               g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
            }
 
--- | For a group containing class instances and declarations, find method
--- signatures that contain debug constraints, then modify the instance definitions
--- of those functions to add instrumentation.
--- TODO what about where bindings within method definitions (done)? Is this a more general
--- problem where only top level functions with Debug constraints are recursively checked
--- for where bindings that have debug constraints? Yes, where bound functions
--- inside of functions that are not marked for debug will not be treated. Is this
--- really a problem though?
-modifyTyClGroup
-  :: Ghc.Name -- ^ Debug name
-  -> Ghc.Name -- ^ DebugKey name
-  -> Ghc.Name -- ^ entry name
-  -> Ghc.TyClGroup Ghc.GhcRn
-  -> Ghc.TcM (Ghc.TyClGroup Ghc.GhcRn)
-modifyTyClGroup debugName debugKeyName entryName
-  tyClGroup@Ghc.TyClGroup{ Ghc.group_instds = instances
-                         , Ghc.group_tyclds = tyCls } = do
-    let modifyInstance c@Ghc.ClsInstD{ Ghc.cid_inst = inst } = do
-          inst' <-
-            modifyClsInstDecl tyClNameMap debugName debugKeyName entryName inst
-          pure c { Ghc.cid_inst = inst' }
-    instances' <- (traverse . traverse) modifyInstance instances
-
-    tyCls' <-
-      (traverse . traverse)
-        (modifyDefaultTyClImpl tyClNameMap debugName debugKeyName entryName)
-        tyCls
-
-    pure tyClGroup { Ghc.group_instds = instances', Ghc.group_tyclds = tyCls' }
-  where
-    maybeClassDecl c@Ghc.ClassDecl{} = Just c
-    maybeClassDecl _ = Nothing
-    tyClNameMap =
-      foldMap
-          ( foldMap (sigUsesDebugPred debugName debugKeyName . Ghc.unLoc)
-          . Ghc.tcdSigs
-          )
-      $ mapMaybe (maybeClassDecl . Ghc.unLoc) tyCls
-
 -- TODO Use a context Reader to pass around names and map
-
--- | Instrument the default implementations in a class decl
-modifyDefaultTyClImpl
-  :: M.Map Ghc.Name (Maybe Ghc.FastString)
-  -> Ghc.Name -- ^ Debug name
-  -> Ghc.Name -- ^ DebugKey name
-  -> Ghc.Name -- ^ entry name
-  -> Ghc.TyClDecl Ghc.GhcRn
-  -> Ghc.TcM (Ghc.TyClDecl Ghc.GhcRn)
-modifyDefaultTyClImpl nameMap debugName debugKeyName entryName
-    cd@Ghc.ClassDecl { Ghc.tcdMeths = meths } = do
-  let innerBindNames =
-        Syb.everything M.union
-          (Syb.mkQ mempty $ sigUsesDebugPred debugName debugKeyName)
-          meths
-      nameMap' = innerBindNames <> nameMap
-
-  newMeths <-
-    Syb.mkM (modifyBinding nameMap' entryName)
-      `Syb.everywhereM` meths
-
-  pure cd { Ghc.tcdMeths = newMeths }
-modifyDefaultTyClImpl _ _ _ _ x = pure x
-
--- | Modify bindings for a type class instance declaration.
-modifyClsInstDecl
-  :: M.Map Ghc.Name (Maybe Ghc.FastString)
-  -> Ghc.Name -- ^ Debug name
-  -> Ghc.Name -- ^ DebugKey name
-  -> Ghc.Name -- ^ entry name
-  -> Ghc.ClsInstDecl Ghc.GhcRn
-  -> Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
-modifyClsInstDecl tyClNameMap debugName debugKeyName entryName
-    inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds, Ghc.cid_sigs = sigs }
-      = do
-
-  -- This is will collect names from inner where bound functions as well as
-  -- instance signatures which might want to override the signature from the
-  -- class method definition.
-  let getSigName (Ghc.L _ sig)
-        = sigUsesDebugPred debugName debugKeyName sig
-      allSigNames = foldMap getSigName sigs
-
-      innerBindNames =
-        Syb.everything M.union
-          (Syb.mkQ mempty $ sigUsesDebugPred debugName debugKeyName)
-          binds
-
-      -- Instrumenting class methods only works if the method definition AND
-      -- the instance signature have the pred.
-      nameMap' = M.unions [innerBindNames, allSigNames, tyClNameMap]
-
-  newBinds <-
-    Syb.mkM (modifyBinding nameMap' entryName)
-      `Syb.everywhereM` binds
-
-  pure inst { Ghc.cid_binds = newBinds }
 
 -- | Produce the contents of the where binding that contains the new debug IP
 -- value, generated by creating a new ID and pairing it with the old one.
