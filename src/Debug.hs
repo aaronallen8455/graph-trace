@@ -76,7 +76,8 @@ fileLock = unsafePerformIO $ do
 {-# NOINLINE fileLock  #-}
 
 trace :: (?_debug_ip :: Maybe DebugIPTy) => String -> a -> a
-trace msg x =
+-- forcing msg is required here since the file MVar could be entagled with it
+trace !msg x =
   case ?_debug_ip of
     Nothing -> x
     Just ip -> unsafePerformIO $ do
@@ -280,25 +281,23 @@ sigUsesDebugPred
   -> Ghc.Name
   -> Ghc.Sig Ghc.GhcRn
   -> M.Map Ghc.Name (Maybe Ghc.FastString)
-sigUsesDebugPred debugPredName debugKeyPredName
-  (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
-    (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))) =
+sigUsesDebugPred debugPredName debugKeyPredName sig =
+  case sig of
+    (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
+      (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _)))))
+        -> collect lNames ctx
+    (Ghc.ClassOpSig _ _ lNames (Ghc.HsIB _
+      (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))
+        -> collect lNames ctx
+    _ -> mempty
+  where
+    collect lNames ctx =
       let mKey = listToMaybe
            $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
                       (Ghc.unLoc <$> ctx)
        in case mKey of
             Nothing -> mempty
             Just key -> M.fromList $ zip (Ghc.unLoc <$> lNames) (repeat key)
-sigUsesDebugPred debugPredName debugKeyPredName
-  (Ghc.ClassOpSig _ _ lNames (Ghc.HsIB _
-    (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _)))) =
-      let mKey = listToMaybe
-           $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
-                      (Ghc.unLoc <$> ctx)
-       in case mKey of
-            Nothing -> mempty
-            Just key -> M.fromList $ zip (Ghc.unLoc <$> lNames) (repeat key)
-sigUsesDebugPred _ _ _ = mempty
 
 checkForDebugPred
   :: Ghc.Name
@@ -412,7 +411,7 @@ modifyMatch whereBindExpr emitEntryName match = do
               }
         } = Syb.everywhereBut
               (Syb.mkQ False stopCondition)
-              (Syb.mkT $ updateDebugIpInFunBind visitedNames whereBindName)
+              (Syb.mkT $ updateDebugIpInFunBind whereBindName)
               match
 
       ipValWhereBind = mkWhereBinding whereBindName whereBindExpr
@@ -449,15 +448,11 @@ modifyMatch whereBindExpr emitEntryName match = do
 -- and then updates the definitions of those functions to add the special let
 -- statement referencing the where binding.
 updateDebugIpInFunBind
-  :: S.Set Ghc.Name
-  -> Ghc.Name
+  :: Ghc.Name
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
-updateDebugIpInFunBind visitedNames whereVarName
-    b@Ghc.FunBind{ Ghc.fun_matches = m@Ghc.MG{ Ghc.mg_alts = alts }
-                 , Ghc.fun_id = Ghc.L _ funName
-                 }
-  | funName `S.notMember` visitedNames
+updateDebugIpInFunBind whereVarName
+    b@Ghc.FunBind{ Ghc.fun_matches = m@Ghc.MG{ Ghc.mg_alts = alts } }
   = b { Ghc.fun_matches =
         m { Ghc.mg_alts = (fmap . fmap . fmap) updateMatch alts }
       }
@@ -466,7 +461,7 @@ updateDebugIpInFunBind visitedNames whereVarName
       = mtch{Ghc.m_grhss =
                g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
             }
-updateDebugIpInFunBind _ _ b = b
+updateDebugIpInFunBind _ b = b
 
 -- TODO have some warning when optimizations are turned on.
 

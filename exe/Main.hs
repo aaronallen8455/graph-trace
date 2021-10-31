@@ -22,7 +22,9 @@ test = do
   trace "test" pure ()
   putStrLn $ deff (I 3)
   x <- readLn
-  putStrLn $ classy (I x)
+  case x of
+    3 -> putStrLn $ classy (I x)
+    _ -> pure ()
   putStrLn $ classier (I 5)
   inWhere
   let inLet :: Debug => IO ()
@@ -32,6 +34,8 @@ test = do
           where letWhere = trace "hello" pure ()
   inLet
   another
+  let letBound = letBoundThing
+  trace letBound pure ()
   trace "leaving" pure ()
     where
       inWhere :: Debug => IO ()
@@ -48,6 +52,9 @@ another
 
 andAnother :: Debug => IO ()
 andAnother = trace "hello!" pure ()
+
+letBoundThing :: Debug => String
+letBoundThing = "bound by let"
 
 newtype I = I Int deriving Show
 

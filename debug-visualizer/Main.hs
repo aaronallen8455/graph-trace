@@ -52,44 +52,55 @@ buildGraph = foldr build mempty where
   mkKey (DT.DT invId eKey) = (invId, either id id eKey)
 
 graphToDot :: M.Map (Word, String) [NodeEntry] -> String
-graphToDot graph = header <> fst (M.foldlWithKey' doNode ("", cycle edgeColors) graph) <> "}"
+graphToDot graph = header <> graphContent <> "}"
   where
+    graphContent =
+      -- knot-tying is used to get the color of a node from the edge pointing to that node.
+      -- TODO consider doing separate traversals for edges and nodes so that the
+      -- result can be built strictly.
+      let (output, _, colorMap) =
+            M.foldrWithKey (doNode colorMap) ("", cycle edgeColors, mempty) graph
+       in output
     header :: String
-    header = "digraph {\nnode [shape=plaintext]\n"
-    doNode (acc, colors) key entries =
-      let (cells, edges, colors') = foldr doEntry ([], [], colors) (zip entries [1..])
+    header = "digraph {\nnode [shape=plaintext colorscheme=set28]\n"
+    doNode finalColorMap key entries (acc, colors, colorMapAcc) =
+      let (cells, edges, colors', colorMapAcc')
+            = foldr doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
           acc' = tableStart
               <> labelCell
               <> unlines cells
               <> tableEnd
               <> unlines edges
               <> acc
-       in (acc', colors')
+       in (acc', colors', colorMapAcc')
       where
         keyStr (i, k) = k <> show i
-        labelCell = "<TR><TD BGCOLOR=\"grey94\"><B>" <> snd key <> "</B></TD></TR>\n"
+        nodeColor = case M.lookup (keyStr key) finalColorMap of
+                      Nothing -> ""
+                      Just c -> "BGCOLOR=\"" <> c <> "\" "
+        labelCell = "<TR><TD " <> nodeColor <> "><B>" <> snd key <> "</B></TD></TR>\n"
         tableStart = keyStr key <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
         tableEnd = "</TABLE>>];"
-        doEntry ev (cs, es, colors@(color:nextColors)) = case ev of
+        doEntry ev (cs, es, colors@(color:nextColors), colorMap) = case ev of
           (Message str, idx) ->
             let el = "<TR><TD PORT=\"" <> show idx <> "\">" <> str <> "</TD></TR>"
-             in (el : cs, es, colors)
+             in (el : cs, es, colors, colorMap)
           (Edge edgeKey, idx) ->
             let el = "<TR><TD BGCOLOR=\"" <> color <> "\" PORT=\"" <> show idx
                   <> "\"></TD></TR>"
                 edge = keyStr key <> ":" <> show idx <> " -> " <> keyStr edgeKey
-                       <> " [color = " <> color <> "];"
-             in (el : cs, edge : es, nextColors)
+                       <> " [colorscheme=set28 color=" <> color <> "];"
+             in (el : cs, edge : es, nextColors, M.insert (keyStr edgeKey) color colorMap)
 
 edgeColors :: [String]
-edgeColors =
-  [ "lightgreen"
-  , "lightskyblue1"
-  , "lightgoldenrod"
-  , "lightcoral"
-  , "lightsteelblue"
-  , "navajowhite"
-  , "plum"
-  , "mediumturquoise"
-  , "thistle"
-  ]
+edgeColors = show <$> [1..8]
+--   [ "lightgreen"
+--   , "lightskyblue1"
+--   , "lightgoldenrod"
+--   , "lightcoral"
+--   , "lightsteelblue"
+--   , "navajowhite"
+--   , "plum"
+--   , "mediumturquoise"
+--   , "thistle"
+--   ]
