@@ -30,6 +30,7 @@ library
                , transformers
                , random
   hs-source-dirs:      src
+  ghc-options: -Wall
 
 executable exe
   main-is:             Main.hs

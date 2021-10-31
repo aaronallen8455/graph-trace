@@ -4,9 +4,11 @@
 
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 import Debug
-import           Class
+import Class
 
 main :: Debug => IO ()
 main = do

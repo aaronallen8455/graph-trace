@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 import           Data.Foldable (foldl')
 import qualified Data.Map.Strict as M
 import           Data.Maybe (mapMaybe)
@@ -19,8 +18,10 @@ parseLogEvent ln = case splitAt 6 ln of
   ("entry|", rest) -> do
     [curKey, curId, prevKey, prevId] <- pure $ breakLogLine 4 rest
     curId' <- readMaybe curId
-    prevId' <- readMaybe prevId
-    pure $ DT.EntryEvent (DT.DT curId' (Left curKey)) (Just . DT.DT prevId' $ Left prevKey)
+    let mPrevId' = do
+          pId <- readMaybe prevId
+          pure $ DT.DT pId (Left prevKey)
+    pure $ DT.EntryEvent (DT.DT curId' (Left curKey)) mPrevId'
   ("trace|", rest) -> do
     [curKey, curId, message] <- pure $ breakLogLine 3 rest
     curId' <- readMaybe curId
@@ -29,7 +30,6 @@ parseLogEvent ln = case splitAt 6 ln of
 
 breakLogLine :: Int -> String -> [String]
 breakLogLine 0 inp = [inp]
-breakLogLine _ "" = []
 breakLogLine n inp =
   let (chunk, rest) = break (== '|') inp
    in case rest of
@@ -52,18 +52,19 @@ buildGraph = foldr build mempty where
   mkKey (DT.DT invId eKey) = (invId, either id id eKey)
 
 graphToDot :: M.Map (Word, String) [NodeEntry] -> String
-graphToDot graph = header <> M.foldlWithKey' doNode "" graph <> "}"
+graphToDot graph = header <> fst (M.foldlWithKey' doNode ("", cycle edgeColors) graph) <> "}"
   where
     header :: String
     header = "digraph {\nnode [shape=plaintext]\n"
-    doNode acc key entries =
-      let (cells, edges, _) = foldr doEntry ([], [], cycle edgeColors) (zip entries [1..])
-       in tableStart
-       <> labelCell
-       <> unlines cells
-       <> tableEnd
-       <> unlines edges
-       <> acc
+    doNode (acc, colors) key entries =
+      let (cells, edges, colors') = foldr doEntry ([], [], colors) (zip entries [1..])
+          acc' = tableStart
+              <> labelCell
+              <> unlines cells
+              <> tableEnd
+              <> unlines edges
+              <> acc
+       in (acc', colors')
       where
         keyStr (i, k) = k <> show i
         labelCell = "<TR><TD BGCOLOR=\"grey94\"><B>" <> snd key <> "</B></TD></TR>\n"
@@ -87,8 +88,8 @@ edgeColors =
   , "lightgoldenrod"
   , "lightcoral"
   , "lightsteelblue"
+  , "navajowhite"
   , "plum"
   , "mediumturquoise"
-  , "navajowhite"
   , "thistle"
   ]

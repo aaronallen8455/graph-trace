@@ -8,6 +8,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Debug
   ( plugin
   , trace
@@ -15,22 +17,15 @@ module Debug
   , module DT
   ) where
 
-import           Control.Applicative ((<|>))
 import           Control.Concurrent.MVar
-import           Control.Monad (guard)
 import           Control.Monad.IO.Class (liftIO)
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.Trans.State
-import           Data.Foldable
-import           Data.Functor.Const
 import qualified Data.Generics as Syb
-import           Data.Traversable
-import           Data.IORef
 import qualified Data.Map.Strict as M
 import           Data.Maybe
 import qualified Data.Set as S
 import           GHC.Exts (noinline)
-import           GHC.TypeLits (Symbol)
 import qualified Language.Haskell.TH as TH
 import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
@@ -38,16 +33,13 @@ import qualified System.Random as Rand
 
 import qualified GHC.Builtin.Names as Ghc
 import qualified GHC.Builtin.Types as Ghc
-import qualified GHC.Core as Ghc
 import qualified GHC.Core.Class as Ghc
 import qualified GHC.Core.Make as Ghc
 import qualified GHC.Core.Type as Ghc
-import qualified GHC.Core.Utils as Ghc
 import qualified GHC.Data.Bag as Ghc
 import qualified GHC.Data.FastString as Ghc
 import qualified GHC.Driver.Finder as Ghc
 import qualified GHC.Driver.Plugins as Ghc hiding (TcPlugin)
-import qualified GHC.Driver.Types as Ghc
 import qualified GHC.Hs.Binds as Ghc
 import qualified GHC.Hs.Decls as Ghc
 import qualified GHC.Hs.Expr as Ghc
@@ -55,7 +47,6 @@ import qualified GHC.Hs.Extension as Ghc
 import qualified GHC.Hs.Type as Ghc
 import qualified GHC.Iface.Env as Ghc
 import qualified GHC.Rename.Expr as Ghc
-import qualified GHC.Tc.Plugin as Ghc hiding (lookupOrig, findImportedModule, getTopEnv)
 import qualified GHC.Tc.Types as Ghc
 import qualified GHC.Tc.Types.Constraint as Ghc
 import qualified GHC.Tc.Types.Evidence as Ghc
@@ -63,12 +54,9 @@ import qualified GHC.Tc.Types.Origin as Ghc
 import qualified GHC.Tc.Utils.Monad as Ghc
 import qualified GHC.ThToHs as Ghc
 import qualified GHC.Types.Basic as Ghc
-import qualified GHC.Types.Id as Ghc
 import qualified GHC.Types.Name as Ghc hiding (varName)
-import qualified GHC.Types.Name.Occurrence as Ghc hiding (varName)
 import qualified GHC.Types.SrcLoc as Ghc
 import qualified GHC.Types.Unique.Supply as Ghc
-import qualified GHC.Types.Var as Ghc
 import qualified GHC.Unit.Module.Name as Ghc
 import qualified GHC.Utils.Outputable as Ghc
 
@@ -109,29 +97,11 @@ entry x =
       pure x
 {-# NOINLINE entry  #-}
 
--- TODO include an option that makes all functions that have signatures get
--- automatically instrumented.
--- If the option is engaged, will modify all fun bind signatures in the AST to
--- include the Debug constraint. Not easy to discriminate on fun binds so will
--- just target val binds and modify the list of singatures therein.
--- Then the guard on membership in the map will be removed. But that's not enough
--- because it would include bindings that don't have signatures. Maybe we just
--- need to collect all the signatures anyways. So then the only change would be
--- to add a pass that adds the constraint to all signatures. That is simple
--- enough but performance may start becoming rather poor.
--- Since the map should only be needed for a specific set of bindings, it
--- doesn't need to be passed down recursively.
-
 -- TODO If more than one application is running at once, will need to use
 -- different names for log files. There may be a way to query what the name of
 -- the running application is, otherwise it could be a plugin argument. Looks
 -- like you can get the package name from the CallStack, so maybe that will
 -- work? Probably not since the MVar is defined in the plugin package.
-
--- TODO Can use State monad to collect a Set of the Names that are visited in
--- the main traversal so that the traversal for instrumenting where bindings
--- can then check membership in the set and not process those functions twice.
--- This should prevent the generated where bindings from being processed as well.
 
 plugin :: Ghc.Plugin
 plugin =
@@ -288,7 +258,7 @@ addConstraintToSigType
 addConstraintToSigType debugPred debugKeyPred sig@Ghc.HsIB{ Ghc.hsib_body = t } =
   sig{ Ghc.hsib_body = fmap go t }
     where
-      pred = Ghc.noLoc $ Ghc.HsTyVar Ghc.NoExtField Ghc.NotPromoted (Ghc.noLoc debugPred)
+      predTy = Ghc.noLoc $ Ghc.HsTyVar Ghc.NoExtField Ghc.NotPromoted (Ghc.noLoc debugPred)
       go ty =
         case ty of
           Ghc.HsForAllTy x tele body -> Ghc.HsForAllTy x tele $ go <$> body
@@ -297,8 +267,8 @@ addConstraintToSigType debugPred debugKeyPred sig@Ghc.HsIB{ Ghc.hsib_body = t } 
                 mapMaybe (checkForDebugPred debugPred debugKeyPred)
                   (Ghc.unLoc $ map Ghc.unLoc <$> ctx)
             -> q
-            | otherwise -> Ghc.HsQualTy x (fmap (pred :) ctx) body
-          _ -> Ghc.HsQualTy Ghc.NoExtField (Ghc.noLoc [pred]) (Ghc.noLoc ty)
+            | otherwise -> Ghc.HsQualTy x (fmap (predTy :) ctx) body
+          _ -> Ghc.HsQualTy Ghc.NoExtField (Ghc.noLoc [predTy]) (Ghc.noLoc ty)
 
 -- | If a sig contains the Debug constraint, get the name of the corresponding
 -- binding.
@@ -311,7 +281,7 @@ sigUsesDebugPred
   -> Ghc.Sig Ghc.GhcRn
   -> M.Map Ghc.Name (Maybe Ghc.FastString)
 sigUsesDebugPred debugPredName debugKeyPredName
-  sig@(Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
+  (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
     (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))) =
       let mKey = listToMaybe
            $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
@@ -320,7 +290,7 @@ sigUsesDebugPred debugPredName debugKeyPredName
             Nothing -> mempty
             Just key -> M.fromList $ zip (Ghc.unLoc <$> lNames) (repeat key)
 sigUsesDebugPred debugPredName debugKeyPredName
-  sig@(Ghc.ClassOpSig _ _ lNames (Ghc.HsIB _
+  (Ghc.ClassOpSig _ _ lNames (Ghc.HsIB _
     (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _)))) =
       let mKey = listToMaybe
            $ mapMaybe (checkForDebugPred debugPredName debugKeyPredName)
@@ -328,7 +298,7 @@ sigUsesDebugPred debugPredName debugKeyPredName
        in case mKey of
             Nothing -> mempty
             Just key -> M.fromList $ zip (Ghc.unLoc <$> lNames) (repeat key)
-sigUsesDebugPred _ _ sig = mempty
+sigUsesDebugPred _ _ _ = mempty
 
 checkForDebugPred
   :: Ghc.Name
@@ -364,7 +334,7 @@ modifyBinding nameMap emitEntryName
 
       newAlts <-
         (traverse . traverse . traverse)
-          (modifyMatch nameMap whereBindExpr emitEntryName)
+          (modifyMatch whereBindExpr emitEntryName)
           alts
 
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
@@ -377,80 +347,47 @@ mkWhereBindName = do
 
 mkWhereBinding :: Ghc.Name -> Ghc.LHsExpr Ghc.GhcRn -> Ghc.LHsBind Ghc.GhcRn
 mkWhereBinding whereBindName whereBindExpr =
- Ghc.noLoc Ghc.FunBind
-   { Ghc.fun_ext = mempty
-   , Ghc.fun_id = Ghc.noLoc whereBindName
-   , Ghc.fun_matches =
-       Ghc.MG
-         { Ghc.mg_ext = Ghc.NoExtField
-         , Ghc.mg_alts = Ghc.noLoc
-           [Ghc.noLoc Ghc.Match
-             { Ghc.m_ext = Ghc.NoExtField
-             , Ghc.m_ctxt = Ghc.FunRhs
-                 { Ghc.mc_fun = Ghc.noLoc whereBindName
-                 , Ghc.mc_fixity = Ghc.Prefix
-                 , Ghc.mc_strictness = Ghc.NoSrcStrict
-                 }
-             , Ghc.m_pats = []
-             , Ghc.m_grhss = Ghc.GRHSs
-                 { Ghc.grhssExt = Ghc.NoExtField
-                 , Ghc.grhssGRHSs =
-                   [ Ghc.noLoc $ Ghc.GRHS
-                       Ghc.NoExtField
-                       []
-                       whereBindExpr
-                   ]
-                 , Ghc.grhssLocalBinds = Ghc.noLoc $
-                     Ghc.EmptyLocalBinds Ghc.NoExtField
-                 }
-             }
-           ]
-         , Ghc.mg_origin = Ghc.Generated
-         }
-   , Ghc.fun_tick = []
-   }
-
--- | Add a let binding setting the new value of the IP to each where bound
--- function that does not exist in the map.
-addLetToWhereBinds
-  :: S.Set Ghc.Name
-  -> Ghc.Name
-  -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-  -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
-addLetToWhereBinds visitedNames whereBindName
-  m@Ghc.Match
-    { Ghc.m_grhss =
-        grhs@Ghc.GRHSs
-          { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds }
-    } =
-  let newWhereBinds =
-        case whereBinds of
-          Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
-            let binds' =
-                  fmap (updateDebugIPInBinds visitedNames whereBindName)
-                   <$> binds
-             in Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds' sigs))
-          _ -> whereBinds
-   in m{ Ghc.m_grhss =
-           grhs{ Ghc.grhssLocalBinds = Ghc.L whereLoc newWhereBinds }
-       }
+  Ghc.noLoc Ghc.FunBind
+    { Ghc.fun_ext = mempty
+    , Ghc.fun_id = Ghc.noLoc whereBindName
+    , Ghc.fun_matches =
+        Ghc.MG
+          { Ghc.mg_ext = Ghc.NoExtField
+          , Ghc.mg_alts = Ghc.noLoc
+            [Ghc.noLoc Ghc.Match
+              { Ghc.m_ext = Ghc.NoExtField
+              , Ghc.m_ctxt = Ghc.FunRhs
+                  { Ghc.mc_fun = Ghc.noLoc whereBindName
+                  , Ghc.mc_fixity = Ghc.Prefix
+                  , Ghc.mc_strictness = Ghc.SrcStrict
+                  }
+              , Ghc.m_pats = []
+              , Ghc.m_grhss = Ghc.GRHSs
+                  { Ghc.grhssExt = Ghc.NoExtField
+                  , Ghc.grhssGRHSs =
+                    [ Ghc.noLoc $ Ghc.GRHS
+                        Ghc.NoExtField
+                        []
+                        whereBindExpr
+                    ]
+                  , Ghc.grhssLocalBinds = Ghc.noLoc $
+                      Ghc.EmptyLocalBinds Ghc.NoExtField
+                  }
+              }
+            ]
+          , Ghc.mg_origin = Ghc.Generated
+          }
+    , Ghc.fun_tick = []
+    }
 
 -- | Add a where bind for the new value of the IP, then add let bindings to the
 -- front of each GRHS to set the new value of the IP in that scope.
 modifyMatch
-  :: M.Map Ghc.Name (Maybe Ghc.FastString)
-  -> Ghc.LHsExpr Ghc.GhcRn
+  :: Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.Name
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
-modifyMatch nameMap whereBindExpr emitEntryName
-    match@Ghc.Match
-      { Ghc.m_grhss =
-          grhs@Ghc.GRHSs
-            { Ghc.grhssLocalBinds = whereBinds
-            , Ghc.grhssGRHSs = grhsList
-            }
-      } = do
+modifyMatch whereBindExpr emitEntryName match = do
   whereBindName <- lift mkWhereBindName
 
   visitedNames <- get
@@ -460,21 +397,22 @@ modifyMatch nameMap whereBindExpr emitEntryName
   -- It is also necesarry to descend into potential recursive wheres
   -- but the recursion needs to stop if a known name is found.
   let stopCondition :: Ghc.HsBind Ghc.GhcRn -> Bool
-      stopCondition b@Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
+      stopCondition Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
         = S.member funName visitedNames
+      stopCondition _ = False
 
-      -- recurse entire the entire match to add let bindings to all where
-      -- clauses, including those belonging to let-bound terms at any
-      -- nesting depth
+      -- recurse the entire match to add let bindings to all where clauses,
+      -- including those belonging to let-bound terms at any nesting depth.
+      -- Bindings must be added to let statements in do-blocks as well.
       match'@Ghc.Match
         { Ghc.m_grhss =
             grhs@Ghc.GRHSs
               { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds
               , Ghc.grhssGRHSs = grhsList
               }
-        } = Syb.everywhereBut -- TODO fix this
+        } = Syb.everywhereBut
               (Syb.mkQ False stopCondition)
-              (Syb.mkT $ addLetToWhereBinds visitedNames whereBindName)
+              (Syb.mkT $ updateDebugIpInFunBind visitedNames whereBindName)
               match
 
       ipValWhereBind = mkWhereBinding whereBindName whereBindExpr
@@ -484,7 +422,7 @@ modifyMatch nameMap whereBindExpr emitEntryName
       -- add the generated bind to the function's where clause
       whereBinds' =
         case whereBinds of
-          Ghc.EmptyLocalBinds x ->
+          Ghc.EmptyLocalBinds _ ->
             Ghc.HsValBinds Ghc.NoExtField
               (Ghc.XValBindsLR (Ghc.NValBinds [wrappedBind] []))
 
@@ -507,32 +445,30 @@ modifyMatch nameMap whereBindExpr emitEntryName
                  }
              }
 
--- | Looks for function bindings that are known to have a debug constraint and
--- then updates the definitions of those functions to add the special let
+-- | Targets function bindings that are known to not have a debug constraint
+-- and then updates the definitions of those functions to add the special let
 -- statement referencing the where binding.
-updateDebugIPInBinds
+updateDebugIpInFunBind
   :: S.Set Ghc.Name
   -> Ghc.Name
-  -> Ghc.LHsBinds Ghc.GhcRn
-  -> Ghc.LHsBinds Ghc.GhcRn
-updateDebugIPInBinds visitedNames whereVarName binds
-  = fmap updateBind <$> binds
-    where
-      updateBind :: Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
-      updateBind b@Ghc.FunBind{ Ghc.fun_matches = m@Ghc.MG{ Ghc.mg_alts = alts }
-                              , Ghc.fun_id = Ghc.L _ funName
-                              }
-        | funName `S.notMember` visitedNames
-        = b { Ghc.fun_matches =
-              m { Ghc.mg_alts = (fmap . fmap . fmap) updateMatch alts }
+  -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
+  -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
+updateDebugIpInFunBind visitedNames whereVarName
+    b@Ghc.FunBind{ Ghc.fun_matches = m@Ghc.MG{ Ghc.mg_alts = alts }
+                 , Ghc.fun_id = Ghc.L _ funName
+                 }
+  | funName `S.notMember` visitedNames
+  = b { Ghc.fun_matches =
+        m { Ghc.mg_alts = (fmap . fmap . fmap) updateMatch alts }
+      }
+  where
+    updateMatch mtch@Ghc.Match{Ghc.m_grhss = g@Ghc.GRHSs{Ghc.grhssGRHSs = grhss}}
+      = mtch{Ghc.m_grhss =
+               g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
             }
-      updateBind b = b
-      updateMatch m@Ghc.Match{Ghc.m_grhss = g@Ghc.GRHSs{Ghc.grhssGRHSs = grhss}}
-        = m{Ghc.m_grhss =
-              g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
-           }
+updateDebugIpInFunBind _ _ b = b
 
--- TODO Use a context Reader to pass around names and map
+-- TODO have some warning when optimizations are turned on.
 
 -- | Produce the contents of the where binding that contains the new debug IP
 -- value, generated by creating a new ID and pairing it with the old one.
@@ -541,22 +477,22 @@ mkNewIpExpr newKey = do
   Right exprPs
     <- fmap (Ghc.convertToHsExpr Ghc.Generated Ghc.noSrcSpan)
      . liftIO
-     -- Writing it this way prevents GHC from floating this out with -O2.
-     -- The call to noinline doesn't seem to contribute, but who knows.
+     -- This sometimes gets floated out when optimizations are on. Until this
+     -- can be fixed, should compile with -O0 when using the plugin.
      $ TH.runQ [| noinline $
-                    let mPrevTag = fmap snd ?_debug_ip
-                     in case (mPrevTag, newKey) of
-                          -- If override key matches with previous tag, keep the id
-                          (Just prevTag, Right userKey)
-                            | debugKey prevTag == Right userKey
-                            -> ?_debug_ip
-                          _ -> unsafePerformIO $ do
-                            newId <- Rand.randomIO :: IO Word
-                            let newTag = DT
-                                  { invocationId = newId
-                                  , debugKey = newKey
-                                  }
-                            pure $ Just (mPrevTag, newTag)
+                  let mPrevTag = fmap snd ?_debug_ip
+                   in case (mPrevTag, newKey) of
+                        -- If override key matches with previous tag, keep the id
+                        (Just prevTag, Right userKey)
+                          | debugKey prevTag == Right userKey
+                          -> ?_debug_ip
+                        _ -> unsafePerformIO $ do
+                          newId <- Rand.randomIO :: IO Word
+                          let newTag = DT
+                                { invocationId = newId
+                                , debugKey = newKey
+                                }
+                          pure $ Just (mPrevTag, newTag)
                |]
 
   (exprRn, _) <- Ghc.rnLExpr exprPs

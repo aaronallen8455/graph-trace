@@ -15,7 +15,6 @@ module Debug.Internal.Types
 
 import qualified Data.List as List
 import           GHC.TypeLits
-import qualified GHC.Types.Name as Ghc
 
 type DebugIPTy = (Maybe DebugTag, DebugTag)
 type Debug = (?_debug_ip :: Maybe DebugIPTy) -- (DebugKey key, ?_debug_ip :: String)
