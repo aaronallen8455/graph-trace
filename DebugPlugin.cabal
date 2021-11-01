@@ -22,6 +22,7 @@ library
   exposed-modules:
     Debug
     Debug.Internal.Types
+    Debug.Internal.Trace
   build-depends: base
                , ghc
                , containers

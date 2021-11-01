@@ -1,23 +1,14 @@
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 module Debug
   ( plugin
-  , trace
-  , entry
   , module DT
+  , module Trace
   ) where
 
-import           Control.Concurrent.MVar
 import           Control.Monad.IO.Class (liftIO)
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.Trans.State
@@ -27,8 +18,6 @@ import           Data.Maybe
 import qualified Data.Set as S
 import           GHC.Exts (noinline)
 import qualified Language.Haskell.TH as TH
-import           System.IO
-import           System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Rand
 
 import qualified GHC.Builtin.Names as Ghc
@@ -62,41 +51,9 @@ import qualified GHC.Utils.Outputable as Ghc
 
 import           Debug.Internal.Types
 import qualified Debug.Internal.Types as DT
+import           Debug.Internal.Trace as Trace
 
 import qualified Debug.Trace as D
-
-logFilePath :: FilePath
-logFilePath = "debug_log.txt"
-
-fileLock :: MVar Handle
-fileLock = unsafePerformIO $ do
-  h <- openFile logFilePath AppendMode
-  hSetBuffering h NoBuffering
-  newMVar h
-{-# NOINLINE fileLock  #-}
-
-trace :: (?_debug_ip :: Maybe DebugIPTy) => String -> a -> a
--- forcing msg is required here since the file MVar could be entagled with it
-trace !msg x =
-  case ?_debug_ip of
-    Nothing -> x
-    Just ip -> unsafePerformIO $ do
-      withMVar fileLock $ \h -> do
-        let ev = TraceEvent (snd ip) msg
-        hPutStrLn h $ eventToLogStr ev
-      pure x
-{-# NOINLINE trace  #-}
-
-entry :: (?_debug_ip :: Maybe DebugIPTy) => a -> a
-entry x =
-  case ?_debug_ip of
-    Nothing -> x
-    Just ip -> unsafePerformIO $ do
-      withMVar fileLock $ \h -> do
-        let ev = EntryEvent (snd ip) (fst ip)
-        hPutStrLn h $ eventToLogStr ev
-      pure x
-{-# NOINLINE entry  #-}
 
 -- TODO If more than one application is running at once, will need to use
 -- different names for log files. There may be a way to query what the name of
@@ -125,12 +82,12 @@ renamedResultAction cmdLineOptions tcGblEnv
   Ghc.Found _ debugTypesModule <- liftIO $
     Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug.Internal.Types") Nothing
 
-  Ghc.Found _ debugModule <- liftIO $
-    Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug") Nothing
+  Ghc.Found _ debugTraceModule <- liftIO $
+    Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug.Internal.Trace") Nothing
 
   debugPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "Debug")
   debugKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugKey")
-  entryName <- Ghc.lookupOrig debugModule (Ghc.mkVarOcc "entry")
+  entryName <- Ghc.lookupOrig debugTraceModule (Ghc.mkVarOcc "entry")
 
   -- If the "debug-all" option is passed, add the Debug predicate to all
   -- function signatures.
@@ -149,6 +106,7 @@ renamedResultAction cmdLineOptions tcGblEnv
       valBinds
 
   -- process type class decls and instances
+  -- TODO Only need to traverse with modifyValBinds. Other are not applied deeply
   tyClGroups' <- (`evalStateT` S.empty) $
       Syb.mkM (modifyClsInstDecl debugPredName debugKeyPredName entryName)
     `Syb.extM`
@@ -549,6 +507,8 @@ isDebuggerIpCt ct@Ghc.CDictCan{}
   , ipKey == debuggerIpKey
   = True
 isDebuggerIpCt _ = False
+
+-- TODO can the solver be replaced by a global IP instance?
 
 tcPluginSolver :: Ghc.TcPluginSolver
 tcPluginSolver [] [] wanted = do
