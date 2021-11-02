@@ -18,6 +18,7 @@ import           Data.Maybe
 import qualified Data.Set as S
 import           GHC.Exts (noinline)
 import qualified Language.Haskell.TH as TH
+import           System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Rand
 
 import qualified GHC.Builtin.Names as Ghc

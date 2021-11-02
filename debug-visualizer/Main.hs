@@ -1,6 +1,7 @@
+import           Control.Monad
 import           Data.Foldable (foldl')
 import qualified Data.Map.Strict as M
-import           Data.Maybe (mapMaybe)
+import           Data.Maybe (mapMaybe, isJust)
 import           System.IO
 import           Text.Read (readMaybe)
 
@@ -51,6 +52,8 @@ buildGraph = foldr build mempty where
     = M.insertWith (<>) (mkKey curTag) []
   mkKey (DT.DT invId eKey) = (invId, either id id eKey)
 
+-- TODO add function name to invocation block
+-- TODO if there is no body for an invocation, don't include a graph node for it
 graphToDot :: M.Map (Word, String) [NodeEntry] -> String
 graphToDot graph = header <> graphContent <> "}"
   where
@@ -62,20 +65,24 @@ graphToDot graph = header <> graphContent <> "}"
             M.foldrWithKey (doNode colorMap) ("", cycle edgeColors, mempty) graph
        in output
     header :: String
-    header = "digraph {\nnode [shape=plaintext colorscheme=set28]\n"
+    header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
     doNode finalColorMap key entries (acc, colors, colorMapAcc) =
       let (cells, edges, colors', colorMapAcc')
             = foldr doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
-          acc' = tableStart
-              <> labelCell
-              <> unlines cells
-              <> tableEnd
-              <> unlines edges
-              <> acc
+          acc' =
+            if null entries && isJust mEdgeColor
+               then acc
+               else tableStart
+                 <> labelCell
+                 <> unlines cells
+                 <> tableEnd
+                 <> unlines edges
+                 <> acc
        in (acc', colors', colorMapAcc')
       where
         keyStr (i, k) = k <> show i
-        nodeColor = case M.lookup (keyStr key) finalColorMap of
+        mEdgeColor = M.lookup (keyStr key) finalColorMap
+        nodeColor = case mEdgeColor of
                       Nothing -> ""
                       Just c -> "BGCOLOR=\"" <> c <> "\" "
         labelCell = "<TR><TD " <> nodeColor <> "><B>" <> snd key <> "</B></TD></TR>\n"
@@ -83,17 +90,26 @@ graphToDot graph = header <> graphContent <> "}"
         tableEnd = "</TABLE>>];"
         doEntry ev (cs, es, colors@(color:nextColors), colorMap) = case ev of
           (Message str, idx) ->
-            let el = "<TR><TD PORT=\"" <> show idx <> "\">" <> str <> "</TD></TR>"
+            let el = "<TR><TD ALIGN=\"LEFT\" PORT=\"" <> show idx <> "\">" <> str <> "</TD></TR>"
              in (el : cs, es, colors, colorMap)
           (Edge edgeKey, idx) ->
-            let el = "<TR><TD BGCOLOR=\"" <> color <> "\" PORT=\"" <> show idx
-                  <> "\"></TD></TR>"
-                edge = keyStr key <> ":" <> show idx <> " -> " <> keyStr edgeKey
-                       <> " [colorscheme=set28 color=" <> color <> "];"
-             in (el : cs, edge : es, nextColors, M.insert (keyStr edgeKey) color colorMap)
+            let el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\"" <> color <> "\" PORT=\"" <> show idx
+                  <> "\"><FONT POINT-SIZE=\"8\">" <> snd edgeKey <> "</FONT></TD></TR>"
+                mEdge = do
+                  targetContent <- M.lookup edgeKey graph
+                  guard . not $ null targetContent
+                  Just $
+                    keyStr key <> ":" <> show idx <> " -> " <> keyStr edgeKey
+                    <> " [colorscheme=set28 color=" <> color <> "];"
+
+             in ( el : cs
+                , maybe id (:) mEdge es
+                , nextColors
+                , M.insert (keyStr edgeKey) color colorMap
+                )
 
 edgeColors :: [String]
-edgeColors = show <$> [1..8]
+edgeColors = show <$> [1..8 :: Int]
 --   [ "lightgreen"
 --   , "lightskyblue1"
 --   , "lightgoldenrod"

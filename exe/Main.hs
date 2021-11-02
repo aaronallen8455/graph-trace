@@ -7,12 +7,14 @@
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
+import           Control.Monad
+import           Control.Concurrent
 import Debug
 import Class
 
 main :: Debug => IO ()
 main = do
-  test
+  replicateM_ 2 $ forkIO test
   andAnother
   test
 
