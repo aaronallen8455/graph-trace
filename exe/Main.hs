@@ -4,7 +4,6 @@
 
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE InstanceSigs #-}
-{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 import           Control.Monad

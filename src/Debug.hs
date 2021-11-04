@@ -1,3 +1,6 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -16,45 +19,17 @@ import qualified Data.Generics as Syb
 import qualified Data.Map.Strict as M
 import           Data.Maybe
 import qualified Data.Set as S
-import           GHC.Exts (noinline)
+import           GHC.Magic (noinline)
 import qualified Language.Haskell.TH as TH
 import           System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Rand
 
-import qualified GHC.Builtin.Names as Ghc
-import qualified GHC.Builtin.Types as Ghc
-import qualified GHC.Core.Class as Ghc
-import qualified GHC.Core.Make as Ghc
-import qualified GHC.Core.Type as Ghc
-import qualified GHC.Data.Bag as Ghc
-import qualified GHC.Data.FastString as Ghc
-import qualified GHC.Driver.Finder as Ghc
-import qualified GHC.Driver.Plugins as Ghc hiding (TcPlugin)
-import qualified GHC.Hs.Binds as Ghc
-import qualified GHC.Hs.Decls as Ghc
-import qualified GHC.Hs.Expr as Ghc
-import qualified GHC.Hs.Extension as Ghc
-import qualified GHC.Hs.Type as Ghc
-import qualified GHC.Iface.Env as Ghc
-import qualified GHC.Rename.Expr as Ghc
-import qualified GHC.Tc.Types as Ghc
-import qualified GHC.Tc.Types.Constraint as Ghc
-import qualified GHC.Tc.Types.Evidence as Ghc
-import qualified GHC.Tc.Types.Origin as Ghc
-import qualified GHC.Tc.Utils.Monad as Ghc
-import qualified GHC.ThToHs as Ghc
-import qualified GHC.Types.Basic as Ghc
-import qualified GHC.Types.Name as Ghc hiding (varName)
-import qualified GHC.Types.SrcLoc as Ghc
-import qualified GHC.Types.Unique.Supply as Ghc
-import qualified GHC.Unit.Module.Name as Ghc
-import qualified GHC.Utils.Outputable as Ghc
-
+import qualified Debug.Internal.GhcFacade as Ghc
 import           Debug.Internal.Types
 import qualified Debug.Internal.Types as DT
 import           Debug.Internal.Trace as Trace
 
-import qualified Debug.Trace as D
+-- import qualified Debug.Trace as D
 
 -- TODO If more than one application is running at once, will need to use
 -- different names for log files. There may be a way to query what the name of
@@ -191,6 +166,10 @@ modifyClsInstDecl debugName debugKeyName entryName
   let nameMap = collectNames debugName debugKeyName sigs
   newBinds <- modifyBinds nameMap entryName binds
   pure inst { Ghc.cid_binds = newBinds }
+#if MIN_VERSION_ghc(9,0,0)
+#else
+modifyClsInstDecl _ _ _ x = pure x
+#endif
 
 -- | Matches on type signatures in order to add the constraint to them.
 addConstraintToSig
@@ -221,7 +200,7 @@ addConstraintToSigType debugPred debugKeyPred sig@Ghc.HsIB{ Ghc.hsib_body = t } 
       predTy = Ghc.noLoc $ Ghc.HsTyVar Ghc.NoExtField Ghc.NotPromoted (Ghc.noLoc debugPred)
       go ty =
         case ty of
-          Ghc.HsForAllTy x tele body -> Ghc.HsForAllTy x tele $ go <$> body
+          x@Ghc.HsForAllTy { Ghc.hst_body = body } -> x { Ghc.hst_body = go <$> body }
           q@(Ghc.HsQualTy x ctx body)
             | _ : _ <-
                 mapMaybe (checkForDebugPred debugPred debugKeyPred)
@@ -229,6 +208,10 @@ addConstraintToSigType debugPred debugKeyPred sig@Ghc.HsIB{ Ghc.hsib_body = t } 
             -> q
             | otherwise -> Ghc.HsQualTy x (fmap (predTy :) ctx) body
           _ -> Ghc.HsQualTy Ghc.NoExtField (Ghc.noLoc [predTy]) (Ghc.noLoc ty)
+#if MIN_VERSION_ghc(9,0,0)
+#else
+addConstraintToSigType _ _ x = x
+#endif
 
 -- | If a sig contains the Debug constraint, get the name of the corresponding
 -- binding.
@@ -269,7 +252,7 @@ checkForDebugPred debugPredName _
 checkForDebugPred _ debugKeyPredName
     (Ghc.HsAppTy _ (Ghc.L _ (Ghc.HsTyVar _ _ (Ghc.L _ name))) (Ghc.L _ (Ghc.HsTyLit _ (Ghc.HsStrTy _ key))))
   | name == debugKeyPredName = Just (Just key)
-checkForDebugPred n nk (Ghc.HsForAllTy _ _ (Ghc.L _ ty)) = checkForDebugPred n nk ty
+checkForDebugPred n nk Ghc.HsForAllTy { Ghc.hst_body = Ghc.L _ ty } = checkForDebugPred n nk ty
 checkForDebugPred n nk (Ghc.HsParTy _ (Ghc.L _ ty)) = checkForDebugPred n nk ty
 checkForDebugPred _ _ _ = Nothing
 -- need a case for nested QualTy?
@@ -281,7 +264,8 @@ modifyBinding
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
 modifyBinding nameMap emitEntryName
-  bnd@(Ghc.FunBind _ (Ghc.L _ name) mg@(Ghc.MG _ alts _) _)
+  bnd@Ghc.FunBind { Ghc.fun_id = Ghc.L _ name
+                  , Ghc.fun_matches = mg@(Ghc.MG _ alts _) }
     | Just mUserKey <- M.lookup name nameMap
     = do
       let key = case mUserKey of
@@ -305,10 +289,10 @@ mkWhereBindName = do
 
 mkWhereBinding :: Ghc.Name -> Ghc.LHsExpr Ghc.GhcRn -> Ghc.LHsBind Ghc.GhcRn
 mkWhereBinding whereBindName whereBindExpr =
-  Ghc.noLoc Ghc.FunBind
-    { Ghc.fun_ext = mempty
-    , Ghc.fun_id = Ghc.noLoc whereBindName
-    , Ghc.fun_matches =
+  Ghc.noLoc Ghc.FunBind'
+    { Ghc.fun_ext' = mempty
+    , Ghc.fun_id' = Ghc.noLoc whereBindName
+    , Ghc.fun_matches' =
         Ghc.MG
           { Ghc.mg_ext = Ghc.NoExtField
           , Ghc.mg_alts = Ghc.noLoc
@@ -335,7 +319,6 @@ mkWhereBinding whereBindName whereBindExpr =
             ]
           , Ghc.mg_origin = Ghc.Generated
           }
-    , Ghc.fun_tick = []
     }
 
 -- | Add a where bind for the new value of the IP, then add let bindings to the
@@ -420,6 +403,10 @@ updateDebugIpInFunBind whereVarName
       = mtch{Ghc.m_grhss =
                g{Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
             }
+#if MIN_VERSION_ghc(9,0,0)
+#else
+    updateMatch x = x
+#endif
 updateDebugIpInFunBind _ b = b
 
 -- TODO have some warning when optimizations are turned on.
@@ -462,6 +449,10 @@ emitEntryEvent emitEntryName (Ghc.GRHS x guards body) =
     Ghc.HsApp Ghc.NoExtField
       (Ghc.noLoc . Ghc.HsVar Ghc.NoExtField $ Ghc.noLoc emitEntryName)
       body
+#if MIN_VERSION_ghc(9,0,0)
+#else
+emitEntryEvent _ x = x
+#endif
 
 -- | Given the name of the variable to assign to the debug IP, create a let
 -- expression as a guard statement that updates the IP in that scope.
@@ -485,6 +476,10 @@ updateDebugIPInGRHS whereBindName (Ghc.GRHS x guards body)
                       $ Ghc.noLoc whereBindName
                     )
                 ]
+#if MIN_VERSION_ghc(9,0,0)
+#else
+updateDebugIPInGRHS _ x = x
+#endif
 
 tcPlugin :: Ghc.TcPlugin
 tcPlugin =
@@ -494,8 +489,8 @@ tcPlugin =
     , Ghc.tcPluginSolve = const tcPluginSolver
     }
 
-ppr :: Ghc.Outputable a => a -> String
-ppr = Ghc.showSDocUnsafe . Ghc.ppr
+-- ppr :: Ghc.Outputable a => a -> String
+-- ppr = Ghc.showSDocUnsafe . Ghc.ppr
 
 debuggerIpKey :: Ghc.FastString
 debuggerIpKey = "_debug_ip"

@@ -21,10 +21,12 @@ library
   default-language: Haskell2010
   exposed-modules:
     Debug
+    Debug.Internal.GhcFacade
     Debug.Internal.Types
     Debug.Internal.Trace
   build-depends: base
                , ghc
+               , ghc-prim
                , containers
                , syb
                , template-haskell
