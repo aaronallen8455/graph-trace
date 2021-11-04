@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
@@ -13,18 +14,21 @@ module Debug.Internal.Types
   , UserKey
   ) where
 
-import qualified Data.List as List
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           GHC.TypeLits
 
 type DebugIPTy = (Maybe DebugTag, DebugTag)
 type Debug = (?_debug_ip :: Maybe DebugIPTy) -- (DebugKey key, ?_debug_ip :: String)
 type DebugKey (key :: Symbol) = (?_debug_ip :: Maybe DebugIPTy) -- (DebugKey key, ?_debug_ip :: String)
+-- These are String because they need to be lifted into TH expressions
 type FunName = String
 type UserKey = String
+type MessageContent = BSL.ByteString
 
 data DebugTag =
   DT { invocationId :: {-# UNPACK #-} !Word -- a unique identifier for a particular invocation of a function
-     , debugKey :: Either FunName UserKey -- !(Maybe String)
+     , debugKey :: Either FunName UserKey
          -- The name of the function containing the current execution context
      }
 
@@ -34,28 +38,28 @@ data Event
       (Maybe DebugTag) -- ^ caller's context
   | TraceEvent
       DebugTag
-      String
+      MessageContent
 
-eventToLogStr :: Event -> String
+eventToLogStr :: Event -> BSL.ByteString
 eventToLogStr (EntryEvent current mPrevious) =
-  List.intercalate "|"
+  BSL8.intercalate "|"
     [ "entry"
     , keyStr current
-    , show $ invocationId current
+    , BSL8.pack . show $ invocationId current
     , maybe "" keyStr mPrevious
-    , maybe "" (show . invocationId) mPrevious
+    , maybe "" (BSL8.pack . show . invocationId) mPrevious
     ]
 eventToLogStr (TraceEvent current message) =
-  List.intercalate "|"
+  BSL8.intercalate "|"
     [ "trace"
     , keyStr current
-    , show $ invocationId current
+    , BSL8.pack . show $ invocationId current
     , message
     ]
 
-keyStr :: DebugTag -> String
+keyStr :: DebugTag -> BSL.ByteString
 keyStr
   = either
-      id
-      id
+      BSL8.pack
+      BSL8.pack
   . debugKey

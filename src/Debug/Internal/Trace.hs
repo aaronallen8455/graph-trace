@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE BangPatterns #-}
 module Debug.Internal.Trace
@@ -10,6 +11,8 @@ module Debug.Internal.Trace
   , entry
   ) where
 
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Control.Concurrent.MVar
 import           Control.Monad
 import           System.IO
@@ -24,8 +27,8 @@ trace !msg x =
     Nothing -> x
     Just ip -> unsafePerformIO $ do
       withMVar fileLock $ \h -> do
-        let ev = TraceEvent (snd ip) msg
-        hPutStrLn h $ eventToLogStr ev
+        let ev = TraceEvent (snd ip) (BSL8.pack msg)
+        BSL.hPut h . (<> "\n") $ eventToLogStr ev
       pure x
 {-# NOINLINE trace  #-}
 
@@ -63,7 +66,7 @@ entry x =
     Just ip -> unsafePerformIO $ do
       withMVar fileLock $ \h -> do
         let ev = EntryEvent (snd ip) (fst ip)
-        hPutStrLn h $ eventToLogStr ev
+        BSL.hPut h . (<> "\n") $ eventToLogStr ev
       pure x
 {-# NOINLINE entry  #-}
 

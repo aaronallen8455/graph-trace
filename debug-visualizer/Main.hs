@@ -1,60 +1,64 @@
+{-# LANGUAGE OverloadedStrings #-}
 import           Control.Monad
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy.Char8 as BSL8
+import qualified Data.ByteString.Builder as BSB
 import           Data.Foldable (foldl')
 import qualified Data.Map.Strict as M
 import           Data.Maybe (mapMaybe, isJust)
 import           System.IO
-import           Text.Read (readMaybe)
-
-import qualified Debug.Internal.Types as DT
 
 main :: IO ()
 main = do
-  logContents <- mapMaybe parseLogEvent . lines <$> readFile "debug_log.txt"
+  logContents <- mapMaybe parseLogEvent . BSL8.lines
+             <$> BSL.readFile "debug_log.txt"
   let dotFileContent = graphToDot $ buildGraph logContents
-  writeFile "debug.dot" dotFileContent
+  withFile "debug.dot" WriteMode $ \h -> do
+    hSetBinaryMode h True
+    hSetBuffering h (BlockBuffering Nothing)
+    BSB.hPutBuilder h dotFileContent
+
+data Key = Key { keyId :: !Word, keyName :: !BSL.ByteString }
+  deriving (Eq, Ord)
+
+data LogEntry
+  = Entry Key (Maybe Key)
+  | Trace Key BSL.ByteString
 
 -- TODO use ByteString instead
-parseLogEvent :: String -> Maybe DT.Event
-parseLogEvent ln = case splitAt 6 ln of
+parseLogEvent :: BSL.ByteString -> Maybe LogEntry
+parseLogEvent ln = case BSL8.splitAt 6 ln of
   ("entry|", rest) -> do
-    [curKey, curId, prevKey, prevId] <- pure $ breakLogLine 4 rest
-    curId' <- readMaybe curId
+    [keyName, curId, prevKey, prevId] <- pure $ breakLogLine rest
+    (curId', _) <- BSL8.readInt curId
     let mPrevId' = do
-          pId <- readMaybe prevId
-          pure $ DT.DT pId (Left prevKey)
-    pure $ DT.EntryEvent (DT.DT curId' (Left curKey)) mPrevId'
+          (pId, _) <- BSL8.readInt prevId
+          pure $ Key (fromIntegral pId) prevKey
+    pure $ Entry (Key (fromIntegral curId') keyName) mPrevId'
   ("trace|", rest) -> do
-    [curKey, curId, message] <- pure $ breakLogLine 3 rest
-    curId' <- readMaybe curId
-    pure $ DT.TraceEvent (DT.DT curId' (Left curKey)) message
+    [keyName, curId, message] <- pure $ breakLogLine rest
+    (curId', _) <- BSL8.readInt curId
+    pure $ Trace (Key (fromIntegral curId') keyName) message
   _ -> Nothing
 
-breakLogLine :: Int -> String -> [String]
-breakLogLine 0 inp = [inp]
-breakLogLine n inp =
-  let (chunk, rest) = break (== '|') inp
-   in case rest of
-        '|' : nxt -> chunk : breakLogLine (pred $! n) nxt
-        _ -> [chunk]
+breakLogLine :: BSL.ByteString -> [BSL.ByteString]
+breakLogLine = BSL8.split '|'
 
 data NodeEntry
-  = Message String -- ^ The trace message
-  | Edge (Word, String) -- ^ Id of the invocation to link to
+  = Message BSL.ByteString -- ^ The trace message
+  | Edge Key -- ^ Id of the invocation to link to
 
-buildGraph :: [DT.Event] -> M.Map (Word, String) [NodeEntry]
+buildGraph :: [LogEntry] -> M.Map Key [NodeEntry]
 buildGraph = foldr build mempty where
-  build (DT.TraceEvent tag msg)
-    = M.insertWith (<>) (mkKey tag) [Message msg]
-  build (DT.EntryEvent curTag (Just prevTag))
-    = M.insertWith (<>) (mkKey curTag) []
-    . M.insertWith (<>) (mkKey prevTag) [Edge $ mkKey curTag]
-  build (DT.EntryEvent curTag Nothing)
-    = M.insertWith (<>) (mkKey curTag) []
-  mkKey (DT.DT invId eKey) = (invId, either id id eKey)
+  build (Trace tag msg)
+    = M.insertWith (<>) tag [Message msg]
+  build (Entry curTag (Just prevTag))
+    = M.insertWith (<>) curTag []
+    . M.insertWith (<>) prevTag [Edge curTag]
+  build (Entry curTag Nothing)
+    = M.insertWith (<>) curTag []
 
--- TODO add function name to invocation block
--- TODO if there is no body for an invocation, don't include a graph node for it
-graphToDot :: M.Map (Word, String) [NodeEntry] -> String
+graphToDot :: M.Map Key [NodeEntry] -> BSB.Builder
 graphToDot graph = header <> graphContent <> "}"
   where
     graphContent =
@@ -62,10 +66,12 @@ graphToDot graph = header <> graphContent <> "}"
       -- TODO consider doing separate traversals for edges and nodes so that the
       -- result can be built strictly.
       let (output, _, colorMap) =
-            M.foldrWithKey (doNode colorMap) ("", cycle edgeColors, mempty) graph
+            M.foldrWithKey (doNode colorMap) (mempty, cycle edgeColors, mempty) graph
        in output
-    header :: String
+
+    header :: BSB.Builder
     header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
+
     doNode finalColorMap key entries (acc, colors, colorMapAcc) =
       let (cells, edges, colors', colorMapAcc')
             = foldr doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
@@ -74,42 +80,50 @@ graphToDot graph = header <> graphContent <> "}"
                then acc
                else tableStart
                  <> labelCell
-                 <> unlines cells
+                 <> mconcat cells
                  <> tableEnd
-                 <> unlines edges
+                 <> mconcat edges
                  <> acc
        in (acc', colors', colorMapAcc')
       where
-        keyStr (i, k) = k <> show i
-        mEdgeColor = M.lookup (keyStr key) finalColorMap
+        keyStr (Key i k) = BSB.lazyByteString k <> BSB.wordDec i
+        mEdgeColor = M.lookup key finalColorMap
         nodeColor = case mEdgeColor of
                       Nothing -> ""
                       Just c -> "BGCOLOR=\"" <> c <> "\" "
-        labelCell = "<TR><TD " <> nodeColor <> "><B>" <> snd key <> "</B></TD></TR>\n"
+        labelCell = "<TR><TD " <> nodeColor <> "><B>"
+                 <> BSB.lazyByteString (keyName key) <> "</B></TD></TR>\n"
         tableStart = keyStr key <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
+        tableEnd :: BSB.Builder
         tableEnd = "</TABLE>>];"
+
         doEntry ev (cs, es, colors@(color:nextColors), colorMap) = case ev of
           (Message str, idx) ->
-            let el = "<TR><TD ALIGN=\"LEFT\" PORT=\"" <> show idx <> "\">" <> str <> "</TD></TR>"
+            let el = "<TR><TD ALIGN=\"LEFT\" PORT=\""
+                  <> BSB.wordDec idx <> "\">"
+                  <> BSB.lazyByteString str <> "</TD></TR>"
              in (el : cs, es, colors, colorMap)
           (Edge edgeKey, idx) ->
-            let el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\"" <> color <> "\" PORT=\"" <> show idx
-                  <> "\"><FONT POINT-SIZE=\"8\">" <> snd edgeKey <> "</FONT></TD></TR>"
+            let el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
+                  <> color <> "\" PORT=\"" <> BSB.wordDec idx
+                  <> "\"><FONT POINT-SIZE=\"8\">"
+                  <> BSB.lazyByteString (keyName edgeKey)
+                  <> "</FONT></TD></TR>"
                 mEdge = do
                   targetContent <- M.lookup edgeKey graph
                   guard . not $ null targetContent
                   Just $
-                    keyStr key <> ":" <> show idx <> " -> " <> keyStr edgeKey
+                    keyStr key <> ":" <> BSB.wordDec idx <> " -> " <> keyStr edgeKey
                     <> " [colorscheme=set28 color=" <> color <> "];"
 
              in ( el : cs
                 , maybe id (:) mEdge es
                 , nextColors
-                , M.insert (keyStr edgeKey) color colorMap
+                , M.insert edgeKey color colorMap
                 )
 
-edgeColors :: [String]
-edgeColors = show <$> [1..8 :: Int]
+edgeColors :: [BSB.Builder]
+edgeColors = BSB.intDec <$> [1..8 :: Int]
 --   [ "lightgreen"
 --   , "lightskyblue1"
 --   , "lightgoldenrod"
