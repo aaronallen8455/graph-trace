@@ -194,24 +194,21 @@ addConstraintToSigType
   -> Ghc.Name
   -> Ghc.LHsSigType Ghc.GhcRn
   -> Ghc.LHsSigType Ghc.GhcRn
-addConstraintToSigType debugPred debugKeyPred sig@Ghc.HsIB{ Ghc.hsib_body = t } =
-  sig{ Ghc.hsib_body = fmap go t }
+addConstraintToSigType debugPred debugKeyPred sig@(Ghc.HsSig' t) =
+  Ghc.setSigBody (fmap go t) sig
     where
-      predTy = Ghc.noLoc $ Ghc.HsTyVar Ghc.NoExtField Ghc.NotPromoted (Ghc.noLoc debugPred)
+      predTy = Ghc.noLocA' $ Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted (Ghc.noLocA' debugPred)
       go ty =
         case ty of
           x@Ghc.HsForAllTy { Ghc.hst_body = body } -> x { Ghc.hst_body = go <$> body }
-          q@(Ghc.HsQualTy x ctx body)
+          q@(Ghc.HsQualTy' x ctx body)
             | _ : _ <-
                 mapMaybe (checkForDebugPred debugPred debugKeyPred)
                   (Ghc.unLoc $ map Ghc.unLoc <$> ctx)
             -> q
-            | otherwise -> Ghc.HsQualTy x (fmap (predTy :) ctx) body
-          _ -> Ghc.HsQualTy Ghc.NoExtField (Ghc.noLoc [predTy]) (Ghc.noLoc ty)
-#if MIN_VERSION_ghc(9,0,0)
-#else
+            | otherwise -> Ghc.HsQualTy' x (fmap (predTy :) ctx) body
+          _ -> Ghc.HsQualTy' Ghc.NoExtField (Ghc.noLocA' [predTy]) (Ghc.noLocA' ty)
 addConstraintToSigType _ _ x = x
-#endif
 
 -- | If a sig contains the Debug constraint, get the name of the corresponding
 -- binding.
@@ -225,11 +222,11 @@ sigUsesDebugPred
   -> M.Map Ghc.Name (Maybe Ghc.FastString)
 sigUsesDebugPred debugPredName debugKeyPredName sig =
   case sig of
-    (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsIB _
-      (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _)))))
+    (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsSig'
+      (Ghc.L _ (Ghc.HsQualTy' _ (Ghc.L _ ctx) _)))))
         -> collect lNames ctx
-    (Ghc.ClassOpSig _ _ lNames (Ghc.HsIB _
-      (Ghc.L _ (Ghc.HsQualTy _ (Ghc.L _ ctx) _))))
+    (Ghc.ClassOpSig _ _ lNames (Ghc.HsSig'
+      (Ghc.L _ (Ghc.HsQualTy' _ (Ghc.L _ ctx) _))))
         -> collect lNames ctx
     _ -> mempty
   where
@@ -289,30 +286,30 @@ mkWhereBindName = do
 
 mkWhereBinding :: Ghc.Name -> Ghc.LHsExpr Ghc.GhcRn -> Ghc.LHsBind Ghc.GhcRn
 mkWhereBinding whereBindName whereBindExpr =
-  Ghc.noLoc Ghc.FunBind'
+  Ghc.noLocA' Ghc.FunBind'
     { Ghc.fun_ext' = mempty
-    , Ghc.fun_id' = Ghc.noLoc whereBindName
+    , Ghc.fun_id' = Ghc.noLocA' whereBindName
     , Ghc.fun_matches' =
         Ghc.MG
           { Ghc.mg_ext = Ghc.NoExtField
-          , Ghc.mg_alts = Ghc.noLoc
-            [Ghc.noLoc Ghc.Match
-              { Ghc.m_ext = Ghc.NoExtField
+          , Ghc.mg_alts = Ghc.noLocA'
+            [Ghc.noLocA' Ghc.Match
+              { Ghc.m_ext = Ghc.emptyEpAnn
               , Ghc.m_ctxt = Ghc.FunRhs
-                  { Ghc.mc_fun = Ghc.noLoc whereBindName
+                  { Ghc.mc_fun = Ghc.noLocA' whereBindName
                   , Ghc.mc_fixity = Ghc.Prefix
                   , Ghc.mc_strictness = Ghc.SrcStrict
                   }
               , Ghc.m_pats = []
               , Ghc.m_grhss = Ghc.GRHSs
-                  { Ghc.grhssExt = Ghc.NoExtField
+                  { Ghc.grhssExt = Ghc.emptyComments'
                   , Ghc.grhssGRHSs =
                     [ Ghc.noLoc $ Ghc.GRHS
-                        Ghc.NoExtField
+                        Ghc.emptyEpAnn
                         []
                         whereBindExpr
                     ]
-                  , Ghc.grhssLocalBinds = Ghc.noLoc $
+                  , Ghc.grhssLocalBinds = Ghc.noLoc' $
                       Ghc.EmptyLocalBinds Ghc.NoExtField
                   }
               }
@@ -348,7 +345,12 @@ modifyMatch whereBindExpr emitEntryName match = do
       match'@Ghc.Match
         { Ghc.m_grhss =
             grhs@Ghc.GRHSs
-              { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds
+              { Ghc.grhssLocalBinds =
+#if MIN_VERSION_ghc(9,2,0)
+                  whereBinds
+#else
+                  Ghc.L whereLoc whereBinds
+#endif
               , Ghc.grhssGRHSs = grhsList
               }
         } = Syb.everywhereBut
@@ -364,7 +366,7 @@ modifyMatch whereBindExpr emitEntryName match = do
       whereBinds' =
         case whereBinds of
           Ghc.EmptyLocalBinds _ ->
-            Ghc.HsValBinds Ghc.NoExtField
+            Ghc.HsValBinds Ghc.emptyEpAnn
               (Ghc.XValBindsLR (Ghc.NValBinds [wrappedBind] []))
 
           Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
@@ -377,7 +379,12 @@ modifyMatch whereBindExpr emitEntryName match = do
           _ -> whereBinds
 
   pure match'{ Ghc.m_grhss = grhs
-                 { Ghc.grhssLocalBinds = Ghc.L whereLoc whereBinds'
+                 { Ghc.grhssLocalBinds =
+#if MIN_VERSION_ghc(9,2,0)
+                     whereBinds'
+#else
+                     Ghc.L whereLoc whereBinds'
+#endif
                  , Ghc.grhssGRHSs =
                      fmap ( updateDebugIPInGRHS whereBindName
                           . emitEntryEvent emitEntryName
@@ -445,9 +452,9 @@ emitEntryEvent
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
 emitEntryEvent emitEntryName (Ghc.GRHS x guards body) =
-  Ghc.GRHS x guards . Ghc.noLoc $
-    Ghc.HsApp Ghc.NoExtField
-      (Ghc.noLoc . Ghc.HsVar Ghc.NoExtField $ Ghc.noLoc emitEntryName)
+  Ghc.GRHS x guards . Ghc.noLocA' $
+    Ghc.HsApp Ghc.emptyEpAnn
+      (Ghc.noLocA' . Ghc.HsVar Ghc.NoExtField $ Ghc.noLocA' emitEntryName)
       body
 #if MIN_VERSION_ghc(9,0,0)
 #else
@@ -464,16 +471,16 @@ updateDebugIPInGRHS whereBindName (Ghc.GRHS x guards body)
   = Ghc.GRHS x (ipUpdateGuard : guards) body
   where
     ipUpdateGuard =
-      Ghc.noLoc $
-        Ghc.LetStmt Ghc.NoExtField $
-          Ghc.noLoc $
-            Ghc.HsIPBinds Ghc.NoExtField $
+      Ghc.noLocA' $
+        Ghc.LetStmt Ghc.emptyEpAnn $
+          Ghc.noLoc' $
+            Ghc.HsIPBinds Ghc.emptyEpAnn $
               Ghc.IPBinds Ghc.NoExtField
-                [ Ghc.noLoc $ Ghc.IPBind
-                    Ghc.NoExtField
+                [ Ghc.noLocA' $ Ghc.IPBind
+                    Ghc.emptyEpAnn
                     (Left . Ghc.noLoc $ Ghc.HsIPName "_debug_ip")
-                    (Ghc.noLoc . Ghc.HsVar Ghc.NoExtField
-                      $ Ghc.noLoc whereBindName
+                    (Ghc.noLocA' . Ghc.HsVar Ghc.NoExtField
+                      $ Ghc.noLocA' whereBindName
                     )
                 ]
 #if MIN_VERSION_ghc(9,0,0)

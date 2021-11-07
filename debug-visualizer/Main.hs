@@ -25,7 +25,6 @@ data LogEntry
   = Entry Key (Maybe Key)
   | Trace Key BSL.ByteString
 
--- TODO use ByteString instead
 parseLogEvent :: BSL.ByteString -> Maybe LogEntry
 parseLogEvent ln = case BSL8.splitAt 6 ln of
   ("entry|", rest) -> do
@@ -124,13 +123,3 @@ graphToDot graph = header <> graphContent <> "}"
 
 edgeColors :: [BSB.Builder]
 edgeColors = BSB.intDec <$> [1..8 :: Int]
---   [ "lightgreen"
---   , "lightskyblue1"
---   , "lightgoldenrod"
---   , "lightcoral"
---   , "lightsteelblue"
---   , "navajowhite"
---   , "plum"
---   , "mediumturquoise"
---   , "thistle"
---   ]
