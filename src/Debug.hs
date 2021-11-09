@@ -204,10 +204,20 @@ addConstraintToSigType debugPred debugKeyPred sig@(Ghc.HsSig' t) =
           q@(Ghc.HsQualTy' x ctx body)
             | _ : _ <-
                 mapMaybe (checkForDebugPred debugPred debugKeyPred)
-                  (Ghc.unLoc $ map Ghc.unLoc <$> ctx)
+                  (Ghc.unLoc <$> foldMap Ghc.unLoc ctx)
             -> q
-            | otherwise -> Ghc.HsQualTy' x (fmap (predTy :) ctx) body
-          _ -> Ghc.HsQualTy' Ghc.NoExtField (Ghc.noLocA' [predTy]) (Ghc.noLocA' ty)
+            | otherwise ->
+                Ghc.HsQualTy'
+                  x
+                  (Just $ maybe (Ghc.noLocA' [predTy])
+                                (fmap (predTy :))
+                                ctx
+                  )
+                  body
+          _ -> Ghc.HsQualTy'
+                 Ghc.NoExtField
+                 (Just $ Ghc.noLocA' [predTy])
+                 (Ghc.noLocA' ty)
 addConstraintToSigType _ _ x = x
 
 -- | If a sig contains the Debug constraint, get the name of the corresponding
@@ -223,10 +233,10 @@ sigUsesDebugPred
 sigUsesDebugPred debugPredName debugKeyPredName sig =
   case sig of
     (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsSig'
-      (Ghc.L _ (Ghc.HsQualTy' _ (Ghc.L _ ctx) _)))))
+      (Ghc.L _ (Ghc.HsQualTy' _ (Just (Ghc.L _ ctx)) _)))))
         -> collect lNames ctx
     (Ghc.ClassOpSig _ _ lNames (Ghc.HsSig'
-      (Ghc.L _ (Ghc.HsQualTy' _ (Ghc.L _ ctx) _))))
+      (Ghc.L _ (Ghc.HsQualTy' _ (Just (Ghc.L _ ctx)) _))))
         -> collect lNames ctx
     _ -> mempty
   where

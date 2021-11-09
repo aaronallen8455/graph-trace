@@ -1,5 +1,6 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ViewPatterns #-}
 module Debug.Internal.GhcFacade
   ( module Ghc
   , pattern FunBind'
@@ -183,10 +184,17 @@ emptyComments' = NoExtField
 #endif
 
 pattern HsQualTy'
-  :: XQualTy GhcRn -> LHsContext GhcRn -> LHsType GhcRn -> HsType GhcRn
-pattern HsQualTy' x lctx body
+  :: XQualTy GhcRn
+  -> Maybe (LHsContext GhcRn)
+  -> LHsType GhcRn
+  -> HsType GhcRn
 #if MIN_VERSION_ghc(9,2,0)
-  = HsQualTy x (Just lctx) body
-#else
+pattern HsQualTy' x lctx body
   = HsQualTy x lctx body
+#else
+pattern HsQualTy' x lctx body
+  <- HsQualTy x (Just -> lctx) body
+    where
+      HsQualTy' x Nothing body = HsQualTy x (noLoc []) body
+      HsQualTy' x (Just lctx) body = HsQualTy x lctx body
 #endif
