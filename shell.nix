@@ -4,7 +4,7 @@ with import <nixpkgs> { inherit system; };
 
 mkShell {
   buildInputs = [
-    haskell.compiler.ghc901
+    haskell.compiler.ghc921
     cabal-install
     graphviz
   ];
