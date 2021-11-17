@@ -439,7 +439,8 @@ mkNewIpExpr newKey = do
      -- can be fixed, should compile with -O0 when using the plugin.
      $ TH.runQ [| noinline $
                   let mPrevTag = fmap snd ?_debug_ip
-                   in case (mPrevTag, newKey) of
+                  -- Must put a type annotation on this b/c of -XOverloadedStrings
+                   in case (mPrevTag, newKey :: Either FunName UserKey) of
                         -- If override key matches with previous tag, keep the id
                         (Just prevTag, Right userKey)
                           | debugKey prevTag == Right userKey
