@@ -525,9 +525,8 @@ isDebuggerIpCt _ = False
 -- TODO can the solver be replaced by a global IP instance?
 
 tcPluginSolver :: Ghc.TcPluginSolver
-tcPluginSolver [] [] wanted = do
+tcPluginSolver _ [] wanted = do
   case filter isDebuggerIpCt wanted of
-
     [w]
       | Ghc.IPOccOrigin _ <- Ghc.ctl_origin . Ghc.ctev_loc $ Ghc.cc_ev w
       -> do
