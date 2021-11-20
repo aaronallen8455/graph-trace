@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveLift #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
@@ -5,7 +6,12 @@
 {-# LANGUAGE ImplicitParams #-}
 module Debug.Internal.Types
   ( DebugTag(..)
-  , DebugIPTy
+  , DebugContext(..)
+  , Propagation(..)
+  , DebugIP
+  , DebugMute
+  , DebugDeep
+  , DebugDeepKey
   , Debug
   , DebugKey
   , Event(..)
@@ -17,10 +23,27 @@ module Debug.Internal.Types
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           GHC.TypeLits
+import qualified Language.Haskell.TH.Syntax as TH
 
-type DebugIPTy = (Maybe DebugTag, DebugTag)
-type Debug = (?_debug_ip :: Maybe DebugIPTy) -- (DebugKey key, ?_debug_ip :: String)
-type DebugKey (key :: Symbol) = (?_debug_ip :: Maybe DebugIPTy) -- (DebugKey key, ?_debug_ip :: String)
+data Propagation
+  = Mute -- ^ Does not output traces, overrides other options
+  | Neutral -- ^ Does not output traces, doesn't override other options
+  | Shallow -- ^ Outputs traces for current scope, but does not propagate
+  | Deep -- ^ Outputs traces and propagates to descendents
+  deriving TH.Lift
+
+data DebugContext =
+  DC { previousTag :: Maybe DebugTag
+     , currentTag :: DebugTag
+     , propagation :: Propagation
+     }
+
+type DebugIP = (?_debug_ip :: Maybe DebugContext)
+type DebugMute = ()
+type DebugDeep = DebugIP
+type DebugDeepKey (key :: Symbol) = DebugIP
+type Debug = DebugIP
+type DebugKey (key :: Symbol) = DebugIP
 -- These are String because they need to be lifted into TH expressions
 type FunName = String
 type UserKey = String

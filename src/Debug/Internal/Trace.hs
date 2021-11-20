@@ -20,31 +20,34 @@ import           System.IO.Unsafe (unsafePerformIO)
 
 import           Debug.Internal.Types
 
-trace :: (?_debug_ip :: Maybe DebugIPTy) => String -> a -> a
+trace :: DebugIP => String -> a -> a
 -- forcing msg is required here since the file MVar could be entagled with it
 trace !msg x =
   case ?_debug_ip of
     Nothing -> x
-    Just ip -> unsafePerformIO $ do
-      withMVar fileLock $ \h -> do
-        let ev = TraceEvent (snd ip) (BSL8.pack msg)
-        BSL.hPut h . (<> "\n") $ eventToLogStr ev
-      pure x
+    Just ip
+      | omitTraces (propagation ip) -> x
+      | otherwise ->
+          unsafePerformIO $ do
+          withMVar fileLock $ \h -> do
+            let ev = TraceEvent (currentTag ip) (BSL8.pack msg)
+            BSL.hPut h . (<> "\n") $ eventToLogStr ev
+          pure x
 {-# NOINLINE trace  #-}
 
-traceId :: (?_debug_ip :: Maybe DebugIPTy) => String -> String
+traceId :: DebugIP => String -> String
 traceId = join trace
 
-traceShow :: (?_debug_ip :: Maybe DebugIPTy) => Show a => a -> b -> b
+traceShow :: DebugIP => Show a => a -> b -> b
 traceShow = trace . show
 
-traceShowId :: (?_debug_ip :: Maybe DebugIPTy) => Show a => a -> a
+traceShowId :: DebugIP => Show a => a -> a
 traceShowId = join traceShow
 
-traceM :: (?_debug_ip :: Maybe DebugIPTy, Applicative f) => String -> f ()
+traceM :: (Applicative f, DebugIP) => String -> f ()
 traceM x = trace x $ pure ()
 
-traceShowM :: (?_debug_ip :: Maybe DebugIPTy, Applicative f, Show a) => a -> f ()
+traceShowM :: (Applicative f, Show a, DebugIP) => a -> f ()
 traceShowM = traceM . show
 
 logFilePath :: FilePath
@@ -59,14 +62,23 @@ fileLock = unsafePerformIO $ do
 {-# NOINLINE fileLock  #-}
 
 -- | Emits a message to the log signaling a function invocation
-entry :: (?_debug_ip :: Maybe DebugIPTy) => a -> a
+entry :: DebugIP => a -> a
 entry x =
   case ?_debug_ip of
     Nothing -> x
-    Just ip -> unsafePerformIO $ do
-      withMVar fileLock $ \h -> do
-        let ev = EntryEvent (snd ip) (fst ip)
-        BSL.hPut h . (<> "\n") $ eventToLogStr ev
-      pure x
+    Just ip
+      | omitTraces (propagation ip) -> x
+      | otherwise -> unsafePerformIO $ do
+          withMVar fileLock $ \h -> do
+            let ev = EntryEvent (currentTag ip) (previousTag ip)
+            BSL.hPut h . (<> "\n") $ eventToLogStr ev
+          pure x
 {-# NOINLINE entry  #-}
 
+omitTraces :: Propagation -> Bool
+omitTraces Mute = True
+omitTraces Neutral = True
+omitTraces _ = False
+
+-- TODO allow to apply a function to mute some specific thing
+-- mute :: DebugIP => a -> a

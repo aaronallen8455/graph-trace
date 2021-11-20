@@ -1,12 +1,11 @@
---{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
-{-# OPTIONS_GHC -fplugin=Debug #-}
+{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
+--{-# OPTIONS_GHC -fplugin=Debug #-}
 --{-# OPTIONS_GHC -ddump-rn-ast #-}
 
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ImplicitParams #-}
 
 import           Control.Monad
 import           Control.Concurrent
@@ -109,34 +108,34 @@ zzzz update orig =
         , t2 = updater t2
         }
 
-fzzz :: (?_debug_ip :: Maybe DebugIPTy) => T FieldUpdate -> T Maybe -> T Maybe
-fzzz update orig = entry $
-  let --updater :: (?_debug_ip :: Maybe DebugIPTy)
-      --        => (forall a. T a -> a x) -> Maybe x
-      updater -- | let ?_debug_ip = newIP'
-              = --entry $
-                mkUpdater update orig
-        where
-          newIP' =
-            let mPrevTag = fmap snd ?_debug_ip
-             in unsafePerformIO $ do
-                    newId <- Rand.randomIO :: IO Word
-                    let newTag = DT
-                          { invocationId = newId
-                          , debugKey = Right "test"
-                          }
-                    pure $ Just (mPrevTag, newTag)
-   in MkT
-     { t1 = updater t1
-     , t2 = updater t2
-     }
-  where
-    newIP =
-      let mPrevTag = fmap snd ?_debug_ip
-       in unsafePerformIO $ do
-              newId <- Rand.randomIO :: IO Word
-              let newTag = DT
-                    { invocationId = newId
-                    , debugKey = Right "test"
-                    }
-              pure $ Just (mPrevTag, newTag)
+-- fzzz :: (?_debug_ip :: Maybe DebugIPTy) => T FieldUpdate -> T Maybe -> T Maybe
+-- fzzz update orig = entry $
+--   let --updater :: (?_debug_ip :: Maybe DebugIPTy)
+--       --        => (forall a. T a -> a x) -> Maybe x
+--       updater -- | let ?_debug_ip = newIP'
+--               = --entry $
+--                 mkUpdater update orig
+--         where
+--           newIP' =
+--             let mPrevTag = fmap snd ?_debug_ip
+--              in unsafePerformIO $ do
+--                     newId <- Rand.randomIO :: IO Word
+--                     let newTag = DT
+--                           { invocationId = newId
+--                           , debugKey = Right "test"
+--                           }
+--                     pure $ Just (mPrevTag, newTag)
+--    in MkT
+--      { t1 = updater t1
+--      , t2 = updater t2
+--      }
+--   where
+--     newIP =
+--       let mPrevTag = fmap snd ?_debug_ip
+--        in unsafePerformIO $ do
+--               newId <- Rand.randomIO :: IO Word
+--               let newTag = DT
+--                     { invocationId = newId
+--                     , debugKey = Right "test"
+--                     }
+--               pure $ Just (mPrevTag, newTag)
