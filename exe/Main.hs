@@ -5,11 +5,17 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ImplicitParams #-}
 
 import           Control.Monad
 import           Control.Concurrent
+import           Data.Functor.Identity (Identity(..))
 import Debug
 import Class
+
+import qualified System.Random as Rand
+import           System.IO.Unsafe
 
 main :: Debug => IO ()
 main = do
@@ -72,3 +78,65 @@ instance Classier I where
 -- test :: (?x :: String) => IO ()
 -- test = print ?x
 
+data FieldUpdate a
+  = FieldValue a
+  | FieldOmitted
+  | FieldNull
+
+mkUpdater :: f FieldUpdate
+          -> f Maybe
+          -> (forall a. f a -> a x)
+          -> Maybe x
+mkUpdater update original getField =
+  case getField update of
+    FieldValue a -> Just a
+    FieldOmitted -> getField original
+    FieldNull -> Nothing
+
+data T f =
+  MkT
+    { t1 :: f Bool
+    , t2 :: f String
+    }
+
+zzzz :: T FieldUpdate -> T Maybe -> T Maybe
+zzzz update orig =
+  let updater :: (forall a. T a -> a x) -> Maybe x
+      updater -- | let ?x = 1
+        = mkUpdater update orig
+   in MkT
+        { t1 = updater t1
+        , t2 = updater t2
+        }
+
+fzzz :: (?_debug_ip :: Maybe DebugIPTy) => T FieldUpdate -> T Maybe -> T Maybe
+fzzz update orig = entry $
+  let --updater :: (?_debug_ip :: Maybe DebugIPTy)
+      --        => (forall a. T a -> a x) -> Maybe x
+      updater -- | let ?_debug_ip = newIP'
+              = --entry $
+                mkUpdater update orig
+        where
+          newIP' =
+            let mPrevTag = fmap snd ?_debug_ip
+             in unsafePerformIO $ do
+                    newId <- Rand.randomIO :: IO Word
+                    let newTag = DT
+                          { invocationId = newId
+                          , debugKey = Right "test"
+                          }
+                    pure $ Just (mPrevTag, newTag)
+   in MkT
+     { t1 = updater t1
+     , t2 = updater t2
+     }
+  where
+    newIP =
+      let mPrevTag = fmap snd ?_debug_ip
+       in unsafePerformIO $ do
+              newId <- Rand.randomIO :: IO Word
+              let newTag = DT
+                    { invocationId = newId
+                    , debugKey = Right "test"
+                    }
+              pure $ Just (mPrevTag, newTag)

@@ -465,7 +465,11 @@ emitEntryEvent
 emitEntryEvent emitEntryName (Ghc.GRHS x guards body) =
   Ghc.GRHS x guards . Ghc.noLocA' $
     Ghc.HsApp Ghc.emptyEpAnn
-      (Ghc.noLocA' . Ghc.HsVar Ghc.NoExtField $ Ghc.noLocA' emitEntryName)
+      (Ghc.noLocA' $
+        Ghc.HsApp Ghc.emptyEpAnn
+          (Ghc.noLocA' . Ghc.HsVar Ghc.NoExtField $ Ghc.noLocA' Ghc.dollarName)
+          (Ghc.noLocA' . Ghc.HsVar Ghc.NoExtField $ Ghc.noLocA' emitEntryName)
+      )
       body
 #if MIN_VERSION_ghc(9,0,0)
 #else

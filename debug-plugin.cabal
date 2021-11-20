@@ -39,6 +39,7 @@ executable exe
   -- other-extensions:
   build-depends:       base
                      , debug-plugin
+                     , random
   -- hs-source-dirs:
   default-language:    Haskell2010
 
