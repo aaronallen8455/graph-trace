@@ -172,7 +172,7 @@ modifyClsInstDecl debugNames nameMap
   pure inst { Ghc.cid_binds = newBinds }
 #if MIN_VERSION_ghc(9,0,0)
 #else
-modifyClsInstDecl _ _ _ _ x = pure x
+modifyClsInstDecl _ _ x = pure x
 #endif
 
 -- | Matches on type signatures in order to add the constraint to them.

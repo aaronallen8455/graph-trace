@@ -98,15 +98,15 @@ data T f =
     , t2 :: f String
     }
 
-zzzz :: T FieldUpdate -> T Maybe -> T Maybe
-zzzz update orig =
-  let updater :: (forall a. T a -> a x) -> Maybe x
-      updater -- | let ?x = 1
-        = mkUpdater update orig
-   in MkT
-        { t1 = updater t1
-        , t2 = updater t2
-        }
+-- zzzz :: T FieldUpdate -> T Maybe -> T Maybe
+-- zzzz update orig =
+--   let updater :: (forall a. T a -> a x) -> Maybe x
+--       updater -- | let ?x = 1
+--         = mkUpdater update orig
+--    in MkT
+--         { t1 = updater t1
+--         , t2 = updater t2
+--         }
 
 -- fzzz :: (?_debug_ip :: Maybe DebugIPTy) => T FieldUpdate -> T Maybe -> T Maybe
 -- fzzz update orig = entry $

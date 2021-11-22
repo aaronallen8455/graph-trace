@@ -1,6 +1,6 @@
 cabal-version:       >=1.10
 
-name:                debug-plugin
+name:                graph-trace
 version:             0.1.0.0
 -- synopsis:
 -- description:
@@ -38,15 +38,15 @@ executable exe
   other-modules: Class
   -- other-extensions:
   build-depends:       base
-                     , debug-plugin
+                     , graph-trace
                      , random
   -- hs-source-dirs:
   default-language:    Haskell2010
 
-executable debug-visualizer
+executable graph-trace-viz
   default-language: Haskell2010
   main-is: Main.hs
   build-depends: base
                , containers
                , bytestring
-  hs-source-dirs: debug-visualizer
+  hs-source-dirs: graph-trace-viz

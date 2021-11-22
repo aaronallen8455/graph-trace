@@ -2,5 +2,5 @@
 rm debug_log.txt
 cabal v2-build
 cabal v2-exec exe
-cabal v2-exec debug-visualizer
+cabal v2-exec graph-trace-viz
 dot -Tsvg debug.dot > test.svg
