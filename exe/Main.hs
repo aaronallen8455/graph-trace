@@ -1,5 +1,5 @@
-{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
---{-# OPTIONS_GHC -fplugin=Debug #-}
+--{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
+{-# OPTIONS_GHC -fplugin=Debug #-}
 --{-# OPTIONS_GHC -ddump-rn-ast #-}
 
 {-# LANGUAGE DataKinds #-}
@@ -16,13 +16,13 @@ import Class
 import qualified System.Random as Rand
 import           System.IO.Unsafe
 
-main :: Debug => IO ()
+main :: DebugDeep => IO ()
 main = do
   replicateM_ 2 $ forkIO test
   andAnother
   test
 
-test :: Debug => IO ()
+test :: IO ()
 test = do
   andAnother
   trace "test" pure ()
@@ -33,7 +33,7 @@ test = do
     _ -> pure ()
   putStrLn $ classier (I 5)
   inWhere
-  let inLet :: Debug => IO ()
+  let inLet :: IO ()
       inLet = do
         letWhere
         another

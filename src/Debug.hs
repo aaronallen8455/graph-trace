@@ -16,6 +16,7 @@ module Debug
 import           Control.Monad.IO.Class (liftIO)
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.Trans.State
+import           Control.Monad.Trans.Writer.CPS
 import qualified Data.Generics as Syb
 import qualified Data.Map.Strict as M
 import           Data.Maybe
@@ -63,39 +64,39 @@ renamedResultAction cmdLineOptions tcGblEnv
     Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug.Internal.Trace") Nothing
 
   debugMutePredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugMute")
-  debugHaltPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugHalt")
   debugDeepPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugDeep")
   debugDeepKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugDeepKey")
   debugPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "Debug")
   debugKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugKey")
+  debugInertPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugInert")
   entryName <- Ghc.lookupOrig debugTraceModule (Ghc.mkVarOcc "entry")
 
   let debugNames = DebugNames{..}
 
   -- If the "debug-all" option is passed, add the Debug predicate to all
   -- function signatures.
-  let hsGroup'@Ghc.HsGroup
+  let debugAllFlag = "debug-all" `elem` cmdLineOptions
+      (hsGroup'@Ghc.HsGroup
         { Ghc.hs_valds = valBinds --Ghc.XValBindsLR (Ghc.NValBinds binds sigs)
         , Ghc.hs_tyclds = tyClGroups
-        } = if "debug-all" `elem` cmdLineOptions
-            then Syb.mkT (addConstraintToSig debugNames)
-                   `Syb.everywhere` hsGroup
-            else hsGroup
+        }, nameMap) = runWriter
+          $ Syb.mkM (addConstraintToSig debugNames debugAllFlag)
+              `Syb.everywhereM` hsGroup
 
   -- process value bindings
   valBinds' <- (`evalStateT` S.empty) $
-      Syb.mkM (modifyValBinds debugNames)
+      Syb.mkM (modifyValBinds debugNames nameMap)
     `Syb.everywhereM`
       valBinds
 
   -- process type class decls and instances
   -- TODO Only need to traverse with modifyValBinds. Other are not applied deeply
   tyClGroups' <- (`evalStateT` S.empty) $
-      Syb.mkM (modifyClsInstDecl debugNames)
+      Syb.mkM (modifyClsInstDecl debugNames nameMap)
     `Syb.extM`
-      modifyTyClDecl debugNames
+      modifyTyClDecl debugNames nameMap
     `Syb.extM`
-      modifyValBinds debugNames
+      modifyValBinds debugNames nameMap
     `Syb.everywhereM`
       tyClGroups
 
@@ -110,23 +111,13 @@ renamedResultAction _ tcGblEnv group = pure (tcGblEnv, group)
 data DebugNames =
   DebugNames
     { debugMutePredName :: Ghc.Name
-    , debugHaltPredName :: Ghc.Name
     , debugDeepPredName :: Ghc.Name
     , debugDeepKeyPredName :: Ghc.Name
     , debugPredName :: Ghc.Name
     , debugKeyPredName :: Ghc.Name
+    , debugInertPredName :: Ghc.Name
     , entryName :: Ghc.Name
     }
-
--- | Find all function names that have a type signature containing a debug pred.
--- If the DebugKey pred is found, record its assigned string.
-collectNames
-  :: DebugNames
-  -> [Ghc.LSig Ghc.GhcRn]
-  -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
-collectNames debugNames =
-  (foldMap . foldMap)
-    (sigUsesDebugPred debugNames)
 
 -- | Instrument a set of bindings given a Map containing the names of functions
 -- that should be modified.
@@ -142,10 +133,10 @@ modifyBinds nameMap entryName =
 -- | Instrument value bindings that have a signature with a debug pred.
 modifyValBinds
   :: DebugNames
+  -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> Ghc.NHsValBindsLR Ghc.GhcRn
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.NHsValBindsLR Ghc.GhcRn)
-modifyValBinds debugNames (Ghc.NValBinds binds sigs) = do
-  let nameMap = collectNames debugNames sigs
+modifyValBinds debugNames nameMap (Ghc.NValBinds binds sigs) = do
   binds' <-
     (traverse . traverse)
       (modifyBinds nameMap (entryName debugNames))
@@ -157,109 +148,100 @@ modifyValBinds debugNames (Ghc.NValBinds binds sigs) = do
 -- they contain a Debug pred.
 modifyTyClDecl
   :: DebugNames
+  -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> Ghc.TyClDecl Ghc.GhcRn
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.TyClDecl Ghc.GhcRn)
-modifyTyClDecl debugNames
+modifyTyClDecl debugNames nameMap
     cd@Ghc.ClassDecl { Ghc.tcdMeths = meths
-                     , Ghc.tcdSigs = sigs
                      } = do
-  let nameMap = collectNames debugNames sigs
   newMeths <- modifyBinds nameMap (entryName debugNames) meths
   pure cd { Ghc.tcdMeths = newMeths }
-modifyTyClDecl _ x = pure x
+modifyTyClDecl _ _ x = pure x
 
 -- | Instrument the method implementations in an type class instance if it has
 -- a signature containing a debug pred.
 modifyClsInstDecl
   :: DebugNames
+  -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> Ghc.ClsInstDecl Ghc.GhcRn
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
-modifyClsInstDecl debugNames
-    inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds, Ghc.cid_sigs = sigs }
+modifyClsInstDecl debugNames nameMap
+    inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds }
       = do
-  let nameMap = collectNames debugNames sigs
   newBinds <- modifyBinds nameMap (entryName debugNames) binds
   pure inst { Ghc.cid_binds = newBinds }
 #if MIN_VERSION_ghc(9,0,0)
 #else
-modifyClsInstDecl _ _ _ x = pure x
+modifyClsInstDecl _ _ _ _ x = pure x
 #endif
 
 -- | Matches on type signatures in order to add the constraint to them.
 addConstraintToSig
   :: DebugNames
+  -> Bool -- True <=> Debug all functions
   -> Ghc.Sig Ghc.GhcRn
-  -> Ghc.Sig Ghc.GhcRn
-addConstraintToSig debugNames
-  (Ghc.TypeSig x1 lNames (Ghc.HsWC x2 sig)) =
-    Ghc.TypeSig x1 lNames (Ghc.HsWC x2
-      (addConstraintToSigType debugNames sig))
-addConstraintToSig debugNames
-  (Ghc.ClassOpSig x1 b lNames sig) =
-    Ghc.ClassOpSig x1 b lNames
-      (addConstraintToSigType debugNames sig)
-addConstraintToSig _ s = s
+  -> Writer (M.Map Ghc.Name (Maybe Ghc.FastString, Propagation))
+            (Ghc.Sig Ghc.GhcRn)
+addConstraintToSig debugNames debugAllFlag
+  (Ghc.TypeSig x1 lNames (Ghc.HsWC x2 sig)) = do
+    sig' <- addConstraintToSigType debugNames debugAllFlag (Ghc.unLoc <$> lNames) sig
+    pure $ Ghc.TypeSig x1 lNames (Ghc.HsWC x2 sig')
+addConstraintToSig debugNames debugAllFlag
+  (Ghc.ClassOpSig x1 b lNames sig) = do
+    sig' <- addConstraintToSigType debugNames debugAllFlag (Ghc.unLoc <$> lNames) sig
+    pure $ Ghc.ClassOpSig x1 b lNames sig'
+addConstraintToSig _ _ s = pure s
 
 -- | Adds the 'Debug' constraint to a signature if it doesn't already have it
 -- as the first constraint in the context.
 addConstraintToSigType
   :: DebugNames
+  -> Bool -- True <=> Debug all functions
+  -> [Ghc.Name]
   -> Ghc.LHsSigType Ghc.GhcRn
-  -> Ghc.LHsSigType Ghc.GhcRn
-addConstraintToSigType debugNames sig@(Ghc.HsSig' t) =
-  Ghc.setSigBody (fmap go t) sig
+  -> Writer (M.Map Ghc.Name (Maybe Ghc.FastString, Propagation))
+            (Ghc.LHsSigType Ghc.GhcRn)
+addConstraintToSigType debugNames debugAllFlag names sig@(Ghc.HsSig' t) = do
+  sigBody <- traverse go t
+  pure $ Ghc.setSigBody sigBody sig
     where
+      prop = if debugAllFlag then Shallow else Inert
+      predName =
+        if debugAllFlag
+           then debugPredName debugNames
+           else debugInertPredName debugNames
       predTy = Ghc.noLocA'
              $ Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted
-                 (Ghc.noLocA' (debugPredName debugNames))
+                 (Ghc.noLocA' predName)
       go ty =
         case ty of
-          x@Ghc.HsForAllTy { Ghc.hst_body = body } -> x { Ghc.hst_body = go <$> body }
+          x@Ghc.HsForAllTy { Ghc.hst_body = body } -> do
+            body' <- traverse go body
+            pure $ x { Ghc.hst_body = body' }
           q@(Ghc.HsQualTy' x ctx body)
-            | _ : _ <-
+            | foundPred : _ <-
                 mapMaybe (checkForDebugPred debugNames)
                   (Ghc.unLoc <$> foldMap Ghc.unLoc ctx)
-            -> q
-            | otherwise ->
+            -> do tell (M.fromList $ names `zip` repeat foundPred)
+                  pure q
+            | otherwise -> do
+                tell (M.fromList $ names `zip` repeat (Nothing, prop))
+                pure $
+                  Ghc.HsQualTy'
+                    x
+                    (Just $ maybe (Ghc.noLocA' [predTy])
+                                  (fmap (predTy :))
+                                  ctx
+                    )
+                    body
+          _ -> do
+              tell (M.fromList $ names `zip` repeat (Nothing, prop))
+              pure $
                 Ghc.HsQualTy'
-                  x
-                  (Just $ maybe (Ghc.noLocA' [predTy])
-                                (fmap (predTy :))
-                                ctx
-                  )
-                  body
-          _ -> Ghc.HsQualTy'
-                 Ghc.NoExtField
-                 (Just $ Ghc.noLocA' [predTy])
-                 (Ghc.noLocA' ty)
-addConstraintToSigType _ x = x
-
--- | If a sig contains the Debug constraint, get the name of the corresponding
--- binding.
---
--- Are there ever more than one name in the TypeSig? yes:
--- one, two :: Debug x => ...
-sigUsesDebugPred
-  :: DebugNames
-  -> Ghc.Sig Ghc.GhcRn
-  -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
-sigUsesDebugPred debugNames sig =
-  case sig of
-    (Ghc.TypeSig _ lNames (Ghc.HsWC _ (Ghc.HsSig'
-      (Ghc.L _ (Ghc.HsQualTy' _ (Just (Ghc.L _ ctx)) _)))))
-        -> collect lNames ctx
-    (Ghc.ClassOpSig _ _ lNames (Ghc.HsSig'
-      (Ghc.L _ (Ghc.HsQualTy' _ (Just (Ghc.L _ ctx)) _))))
-        -> collect lNames ctx
-    _ -> mempty
-  where
-    collect lNames ctx =
-      let mKey = listToMaybe
-           $ mapMaybe (checkForDebugPred debugNames)
-                      (Ghc.unLoc <$> ctx)
-       in case mKey of
-            Nothing -> mempty
-            Just key -> M.fromList $ zip (Ghc.unLoc <$> lNames) (repeat key)
+                  Ghc.NoExtField
+                  (Just $ Ghc.noLocA' [predTy])
+                  (Ghc.noLocA' ty)
+addConstraintToSigType _ _ _ x = pure x
 
 checkForDebugPred
   :: DebugNames
@@ -270,6 +252,7 @@ checkForDebugPred debugNames
   | name == debugPredName debugNames = Just (Nothing, Shallow)
   | name == debugDeepPredName debugNames = Just (Nothing, Deep)
   | name == debugMutePredName debugNames = Just (Nothing, Mute)
+  | name == debugInertPredName debugNames = Just (Nothing, Inert)
 checkForDebugPred debugNames
     (Ghc.HsAppTy _ (Ghc.L _ (Ghc.HsTyVar _ _ (Ghc.L _ name))) (Ghc.L _ (Ghc.HsTyLit _ (Ghc.HsStrTy _ key))))
   | name == debugKeyPredName debugNames = Just (Just key, Shallow)
@@ -300,7 +283,7 @@ modifyBinding nameMap entryName
 
       newAlts <-
         (traverse . traverse . traverse)
-          (modifyMatch whereBindExpr entryName)
+          (modifyMatch prop whereBindExpr entryName)
           alts
 
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
@@ -348,11 +331,12 @@ mkWhereBinding whereBindName whereBindExpr =
 -- | Add a where bind for the new value of the IP, then add let bindings to the
 -- front of each GRHS to set the new value of the IP in that scope.
 modifyMatch
-  :: Ghc.LHsExpr Ghc.GhcRn
+  :: Propagation
+  -> Ghc.LHsExpr Ghc.GhcRn
   -> Ghc.Name
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
-modifyMatch whereBindExpr entryName match = do
+modifyMatch prop whereBindExpr entryName match = do
   whereBindName <- lift mkWhereBindName
 
   visitedNames <- get
@@ -414,7 +398,10 @@ modifyMatch whereBindExpr entryName match = do
 #endif
                  , Ghc.grhssGRHSs =
                      fmap ( updateDebugIPInGRHS whereBindName
-                          . emitEntryEvent entryName
+                     -- Don't emit entry event if propagation is Mute
+                          . if prop == Mute
+                               then id
+                               else emitEntryEvent entryName
                           )
                        <$> grhsList
                  }
@@ -479,7 +466,7 @@ mkNewDebugContext newKey newProp mPrevCtx =
     (Just prevCtx, Right userKey)
       | debugKey (currentTag prevCtx) == Right userKey
       -> prevCtx
-           { propagation = getNextProp (Just $ propagation prevCtx) newProp }
+           { propagation = getNextProp (Just $ propagation prevCtx) }
     _ -> unsafePerformIO $ do
       newId <- Rand.randomIO :: IO Word
       let newTag = DT
@@ -489,15 +476,16 @@ mkNewDebugContext newKey newProp mPrevCtx =
       pure
         DC { previousTag = currentTag <$> mPrevCtx
            , currentTag = newTag
-           , propagation = getNextProp (propagation <$> mPrevCtx) newProp
+           , propagation = getNextProp (propagation <$> mPrevCtx)
            }
   where
-    getNextProp Nothing new = new
-    getNextProp (Just prev) new =
-      case (prev, new) of
+    getNextProp Nothing = newProp
+    getNextProp (Just prev) =
+      case (prev, newProp) of
+        (Mute, _) -> Mute
         (_, Mute) -> Mute
         (Deep, _) -> Deep
-        _         -> new
+        _    -> newProp
 
 -- | Wraps an expression with the 'entry' function. '$' is used to apply it
 -- because it has same special impredicative type properties in ghc 9.2+.

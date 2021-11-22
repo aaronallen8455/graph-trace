@@ -9,6 +9,7 @@ module Debug.Internal.Trace
   , traceM
   , traceShowM
   , entry
+  , omitTraces
   ) where
 
 import qualified Data.ByteString.Lazy as BSL
@@ -77,7 +78,7 @@ entry x =
 
 omitTraces :: Propagation -> Bool
 omitTraces Mute = True
-omitTraces Neutral = True
+omitTraces Inert = True
 omitTraces _ = False
 
 -- TODO allow to apply a function to mute some specific thing

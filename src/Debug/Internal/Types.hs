@@ -14,6 +14,7 @@ module Debug.Internal.Types
   , DebugDeepKey
   , Debug
   , DebugKey
+  , DebugInert
   , Event(..)
   , eventToLogStr
   , FunName
@@ -27,10 +28,10 @@ import qualified Language.Haskell.TH.Syntax as TH
 
 data Propagation
   = Mute -- ^ Does not output traces, overrides other options
-  | Neutral -- ^ Does not output traces, doesn't override other options
+  | Inert -- ^ Does not output traces, doesn't override other options
   | Shallow -- ^ Outputs traces for current scope, but does not propagate
   | Deep -- ^ Outputs traces and propagates to descendents
-  deriving TH.Lift
+  deriving (Eq, Show, TH.Lift)
 
 data DebugContext =
   DC { previousTag :: Maybe DebugTag
@@ -39,11 +40,12 @@ data DebugContext =
      }
 
 type DebugIP = (?_debug_ip :: Maybe DebugContext)
-type DebugMute = ()
+type DebugMute = DebugIP
 type DebugDeep = DebugIP
 type DebugDeepKey (key :: Symbol) = DebugIP
 type Debug = DebugIP
 type DebugKey (key :: Symbol) = DebugIP
+type DebugInert = DebugIP
 -- These are String because they need to be lifted into TH expressions
 type FunName = String
 type UserKey = String
