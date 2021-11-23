@@ -47,6 +47,6 @@ executable graph-trace-viz
   default-language: Haskell2010
   main-is: Main.hs
   build-depends: base
-               , containers
                , bytestring
+               , containers
   hs-source-dirs: graph-trace-viz

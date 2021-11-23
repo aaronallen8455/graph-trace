@@ -4,8 +4,11 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import qualified Data.ByteString.Builder as BSB
 import           Data.Foldable (foldl')
-import qualified Data.Map.Strict as M
+import qualified Data.List as List
+import qualified Data.Map as M
 import           Data.Maybe (mapMaybe, isJust)
+import           Data.Ord (Down(..))
+import           Data.Semigroup (Min(..))
 import           System.IO
 
 main :: IO ()
@@ -19,11 +22,12 @@ main = do
     BSB.hPutBuilder h dotFileContent
 
 data Key = Key { keyId :: !Word, keyName :: !BSL.ByteString }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 data LogEntry
   = Entry Key (Maybe Key)
   | Trace Key BSL.ByteString
+  deriving Show
 
 parseLogEvent :: BSL.ByteString -> Maybe LogEntry
 parseLogEvent ln = case BSL8.splitAt 6 ln of
@@ -46,34 +50,48 @@ breakLogLine = BSL8.split '|'
 data NodeEntry
   = Message BSL.ByteString -- ^ The trace message
   | Edge Key -- ^ Id of the invocation to link to
+  deriving Show
 
-buildGraph :: [LogEntry] -> M.Map Key [NodeEntry]
-buildGraph = foldr build mempty where
-  build (Trace tag msg)
-    = M.insertWith (<>) tag [Message msg]
-  build (Entry curTag (Just prevTag))
-    = M.insertWith (<>) curTag []
-    . M.insertWith (<>) prevTag [Edge curTag]
-  build (Entry curTag Nothing)
-    = M.insertWith (<>) curTag []
+-- Remembers the order in which the elements were inserted
+type Graph = M.Map Key (Min Int, [NodeEntry])
 
-graphToDot :: M.Map Key [NodeEntry] -> BSB.Builder
+buildGraph :: [LogEntry] -> Graph
+buildGraph = foldl' build mempty where
+  build graph entry =
+    case entry of
+      Trace tag msg ->
+        M.insertWith (<>) tag (graphSize, [Message msg]) graph
+      Entry curTag (Just prevTag) ->
+          M.insertWith (<>) curTag (graphSize + 1, [])
+        $ M.insertWith (<>) prevTag (graphSize, [Edge curTag]) graph
+      Entry curTag Nothing ->
+        M.insertWith (<>) curTag (graphSize, []) graph
+    where
+      graphSize = Min $ M.size graph
+
+graphToDot :: Graph -> BSB.Builder
 graphToDot graph = header <> graphContent <> "}"
   where
+    orderedEntries = map (fmap snd)
+                   . List.sortOn (Down . fst . snd)
+                   $ M.toList graph
     graphContent =
       -- knot-tying is used to get the color of a node from the edge pointing to that node.
       -- TODO consider doing separate traversals for edges and nodes so that the
       -- result can be built strictly.
       let (output, _, colorMap) =
-            M.foldrWithKey (doNode colorMap) (mempty, cycle edgeColors, mempty) graph
+            foldl'
+              (doNode colorMap)
+              (mempty, cycle edgeColors, mempty)
+              orderedEntries
        in output
 
     header :: BSB.Builder
     header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
 
-    doNode finalColorMap key entries (acc, colors, colorMapAcc) =
+    doNode finalColorMap (acc, colors, colorMapAcc) (key, entries) =
       let (cells, edges, colors', colorMapAcc')
-            = foldr doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
+            = foldl' doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
           acc' =
             if null entries && isJust mEdgeColor
                then acc
@@ -96,7 +114,7 @@ graphToDot graph = header <> graphContent <> "}"
         tableEnd :: BSB.Builder
         tableEnd = "</TABLE>>];"
 
-        doEntry ev (cs, es, colors@(color:nextColors), colorMap) = case ev of
+        doEntry (cs, es, colors@(color:nextColors), colorMap) ev = case ev of
           (Message str, idx) ->
             let el = "<TR><TD ALIGN=\"LEFT\" PORT=\""
                   <> BSB.wordDec idx <> "\">"
@@ -109,7 +127,7 @@ graphToDot graph = header <> graphContent <> "}"
                   <> BSB.lazyByteString (keyName edgeKey)
                   <> "</FONT></TD></TR>"
                 mEdge = do
-                  targetContent <- M.lookup edgeKey graph
+                  (_, targetContent) <- M.lookup edgeKey graph
                   guard . not $ null targetContent
                   Just $
                     keyStr key <> ":" <> BSB.wordDec idx <> " -> " <> keyStr edgeKey
