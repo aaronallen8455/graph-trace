@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 import           Control.Monad
+import qualified Data.ByteString.Builder as BSB
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
-import qualified Data.ByteString.Builder as BSB
 import           Data.Foldable (foldl')
 import qualified Data.List as List
 import qualified Data.Map as M
@@ -29,23 +30,39 @@ data LogEntry
   | Trace Key BSL.ByteString
   deriving Show
 
+-- | Use this to escape special characters that appear in the HTML portion of
+-- the dot code. Other strings such as node names should not be escaped.
+htmlEscape :: BSL.ByteString -> BSL.ByteString
+htmlEscape bs = foldl' doReplacement bs replacements
+  where
+    doReplacement acc (c, re) =
+      case BSL8.break (== c) acc of
+        (before, after)
+          | BSL.null after -> acc
+          | otherwise -> before <> re <> BSL8.tail after
+
+    replacements =
+      [ ('<', "&lt;")
+      , ('>', "&gt;")
+      ]
+
 parseLogEvent :: BSL.ByteString -> Maybe LogEntry
 parseLogEvent ln = case BSL8.splitAt 6 ln of
-  ("entry|", rest) -> do
+  ("entry§", rest) -> do
     [keyName, curId, prevKey, prevId] <- pure $ breakLogLine rest
     (curId', _) <- BSL8.readInt curId
     let mPrevId' = do
           (pId, _) <- BSL8.readInt prevId
           pure $ Key (fromIntegral pId) prevKey
     pure $ Entry (Key (fromIntegral curId') keyName) mPrevId'
-  ("trace|", rest) -> do
+  ("trace§", rest) -> do
     [keyName, curId, message] <- pure $ breakLogLine rest
     (curId', _) <- BSL8.readInt curId
-    pure $ Trace (Key (fromIntegral curId') keyName) message
+    pure $ Trace (Key (fromIntegral curId') keyName) (htmlEscape message)
   _ -> Nothing
 
 breakLogLine :: BSL.ByteString -> [BSL.ByteString]
-breakLogLine = BSL8.split '|'
+breakLogLine = BSL8.split '§'
 
 data NodeEntry
   = Message BSL.ByteString -- ^ The trace message
@@ -103,13 +120,13 @@ graphToDot graph = header <> graphContent <> "}"
                  <> acc
        in (acc', colors', colorMapAcc')
       where
-        keyStr (Key i k) = BSB.lazyByteString k <> BSB.wordDec i
+        keyStr (Key i k) = "\"" <> BSB.lazyByteString k <> BSB.wordDec i <> "\""
         mEdgeColor = M.lookup key finalColorMap
         nodeColor = case mEdgeColor of
                       Nothing -> ""
                       Just c -> "BGCOLOR=\"" <> c <> "\" "
         labelCell = "<TR><TD " <> nodeColor <> "><B>"
-                 <> BSB.lazyByteString (keyName key) <> "</B></TD></TR>\n"
+                 <> BSB.lazyByteString (htmlEscape $ keyName key) <> "</B></TD></TR>\n"
         tableStart = keyStr key <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
         tableEnd :: BSB.Builder
         tableEnd = "</TABLE>>];"
@@ -124,7 +141,7 @@ graphToDot graph = header <> graphContent <> "}"
             let el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
                   <> color <> "\" PORT=\"" <> BSB.wordDec idx
                   <> "\"><FONT POINT-SIZE=\"8\">"
-                  <> BSB.lazyByteString (keyName edgeKey)
+                  <> BSB.lazyByteString (htmlEscape $ keyName edgeKey)
                   <> "</FONT></TD></TR>"
                 mEdge = do
                   (_, targetContent) <- M.lookup edgeKey graph

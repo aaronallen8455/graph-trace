@@ -1,6 +1,6 @@
 #!/bin/bash
 rm debug_log.txt
 cabal v2-build all
-cabal v2-exec exe
+cabal v2-exec test-exe
 cabal v2-exec graph-trace-viz
 dot -Tsvg debug.dot > test.svg
