@@ -7,7 +7,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Debug
+module Graph.Trace
   ( plugin
   , module DT
   , module Trace
@@ -26,10 +26,10 @@ import qualified Language.Haskell.TH as TH
 import           System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Rand
 
-import qualified Debug.Internal.GhcFacade as Ghc
-import           Debug.Internal.Types
-import qualified Debug.Internal.Types as DT
-import           Debug.Internal.Trace as Trace
+import qualified Graph.Trace.Internal.GhcFacade as Ghc
+import           Graph.Trace.Internal.Types
+import qualified Graph.Trace.Internal.Types as DT
+import           Graph.Trace.Internal.Trace as Trace
 
 -- import qualified Debug.Trace as D
 
@@ -47,6 +47,15 @@ plugin =
     , Ghc.renamedResultAction = renamedResultAction
     }
 
+findImportedModule :: String -> Ghc.TcM Ghc.Module
+findImportedModule moduleName = do
+  hscEnv <- Ghc.getTopEnv
+  result <- liftIO $
+    Ghc.findImportedModule hscEnv (Ghc.mkModuleName moduleName) Nothing
+  case result of
+    Ghc.Found _ m -> pure m
+    _ -> error $ "unable to find module: " <> moduleName
+
 renamedResultAction
   :: [Ghc.CommandLineOption]
   -> Ghc.TcGblEnv
@@ -55,13 +64,8 @@ renamedResultAction
 renamedResultAction cmdLineOptions tcGblEnv
     hsGroup@Ghc.HsGroup{Ghc.hs_valds = Ghc.XValBindsLR{}}
     = do
-  hscEnv <- Ghc.getTopEnv
-
-  Ghc.Found _ debugTypesModule <- liftIO $
-    Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug.Internal.Types") Nothing
-
-  Ghc.Found _ debugTraceModule <- liftIO $
-    Ghc.findImportedModule hscEnv (Ghc.mkModuleName "Debug.Internal.Trace") Nothing
+  debugTypesModule <- findImportedModule "Graph.Trace.Internal.Types"
+  debugTraceModule <- findImportedModule "Graph.Trace.Internal.Trace"
 
   debugMutePredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugMute")
   debugDeepPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugDeep")

@@ -4,7 +4,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ImplicitParams #-}
-module Debug.Internal.Types
+module Graph.Trace.Internal.Types
   ( DebugTag(..)
   , DebugContext(..)
   , Propagation(..)

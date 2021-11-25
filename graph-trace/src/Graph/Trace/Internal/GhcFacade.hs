@@ -1,7 +1,7 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ViewPatterns #-}
-module Debug.Internal.GhcFacade
+module Graph.Trace.Internal.GhcFacade
   ( module Ghc
   , pattern FunBind'
   , fun_ext'

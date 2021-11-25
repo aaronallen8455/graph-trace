@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE BangPatterns #-}
-module Debug.Internal.Trace
+module Graph.Trace.Internal.Trace
   ( trace
   , traceId
   , traceShow
@@ -19,7 +19,7 @@ import           Control.Monad
 import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
 
-import           Debug.Internal.Types
+import           Graph.Trace.Internal.Types
 
 trace :: DebugIP => String -> a -> a
 -- forcing msg is required here since the file MVar could be entagled with it
