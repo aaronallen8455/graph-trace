@@ -13,6 +13,7 @@ module Graph.Trace
   , module Trace
   ) where
 
+import           Control.Monad (when)
 import           Control.Monad.IO.Class (liftIO)
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.Trans.State
@@ -56,6 +57,14 @@ findImportedModule moduleName = do
     Ghc.Found _ m -> pure m
     _ -> error $ "unable to find module: " <> moduleName
 
+warnAboutOptimizations :: Ghc.TcM ()
+warnAboutOptimizations = do
+  generalFlags <- Ghc.generalFlags <$> Ghc.getDynFlags
+  when (Ghc.enumSetMember Ghc.Opt_FullLaziness generalFlags) .
+    liftIO $ putStrLn " * Full laziness is enabled: it's recommended to disable this optimization when using graph-trace. Use the -fno-full-laziness GHC option to disable it."
+  when (Ghc.enumSetMember Ghc.Opt_CSE generalFlags) .
+    liftIO $ putStrLn " * Common sub-expression elimination is enabled: it's recommended to disable this optimization when using graph-trace. Use the -fno-cse GHC option to disable it."
+
 renamedResultAction
   :: [Ghc.CommandLineOption]
   -> Ghc.TcGblEnv
@@ -64,6 +73,8 @@ renamedResultAction
 renamedResultAction cmdLineOptions tcGblEnv
     hsGroup@Ghc.HsGroup{Ghc.hs_valds = Ghc.XValBindsLR{}}
     = do
+  warnAboutOptimizations
+
   debugTypesModule <- findImportedModule "Graph.Trace.Internal.Types"
   debugTraceModule <- findImportedModule "Graph.Trace.Internal.Trace"
 
@@ -464,7 +475,6 @@ mkNewDebugContext
   -> Maybe DebugContext
   -> DebugContext
 mkNewDebugContext newKey newProp mPrevCtx =
-  -- Must put a type annotation on this b/c of -XOverloadedStrings
   case (mPrevCtx, newKey) of
     -- If override key matches with previous tag, keep the id
     (Just prevCtx, Right userKey)
