@@ -16,6 +16,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Control.Concurrent.MVar
 import           Control.Monad
+import           System.Environment (getProgName, lookupEnv)
 import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
 
@@ -51,12 +52,17 @@ traceM x = trace x $ pure ()
 traceShowM :: (Applicative f, Show a, DebugIP) => a -> f ()
 traceShowM = traceM . show
 
-logFilePath :: FilePath
-logFilePath = "debug_log.txt"
-
 -- | Serializes access to the debug log file
 fileLock :: MVar Handle
 fileLock = unsafePerformIO $ do
+  -- check for env variable with file name
+  mOverrideFileName <- lookupEnv "GRAPH_TRACE_FILENAME"
+  logFilePath <-
+    case mOverrideFileName of
+      Nothing -> do
+        progName <- getProgName
+        pure $ progName <> ".trace"
+      Just n -> pure n
   h <- openFile logFilePath AppendMode
   hSetBuffering h NoBuffering
   newMVar h

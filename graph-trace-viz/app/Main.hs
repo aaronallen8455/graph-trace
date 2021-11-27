@@ -1,26 +1,49 @@
 {-# LANGUAGE OverloadedStrings #-}
+import           Control.Applicative ((<|>))
 import           Control.Monad
+import qualified Data.Attoparsec.ByteString.Char8 as Atto
+import qualified Data.Attoparsec.ByteString.Lazy as AttoL
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
-import           Data.Foldable (foldl')
+import           Data.Foldable (foldl', for_)
 import qualified Data.List as List
 import qualified Data.Map as M
 import           Data.Maybe (mapMaybe, isJust)
 import           Data.Ord (Down(..))
 import           Data.Semigroup (Min(..))
+import qualified System.Directory as Dir
+import           System.Environment
 import           System.IO
 
 main :: IO ()
 main = do
-  logContents <- mapMaybe parseLogEvent . BSL8.lines
-             <$> BSL.readFile "debug_log.txt"
-  let dotFileContent = graphToDot $ buildGraph logContents
-  withFile "debug.dot" WriteMode $ \h -> do
-    hSetBinaryMode h True
-    hSetBuffering h (BlockBuffering Nothing)
-    BSB.hPutBuilder h dotFileContent
+  args <- getArgs
+
+  traceFiles <- case args of
+    [] -> do
+      contents <- Dir.listDirectory =<< Dir.getCurrentDirectory
+      let isTraceFile = (".trace" `List.isSuffixOf`)
+      pure $ filter isTraceFile contents
+    xs -> pure xs
+
+  for_ traceFiles $ \traceFile -> do
+    logContents
+      <- either (\err -> fail $ "Failed parsing trace file: " <> err) id
+       . AttoL.parseOnly (Atto.many' parseLogEntry <* Atto.endOfInput)
+     <$> BSL.readFile traceFile
+
+    let dotFileContent = graphToDot $ buildGraph logContents
+        fileName = (<> ".dot")
+                 $ if ".trace" `List.isSuffixOf` traceFile
+                      then reverse . drop 6 $ reverse traceFile
+                      else traceFile
+
+    withFile fileName WriteMode $ \h -> do
+      hSetBinaryMode h True
+      hSetBuffering h (BlockBuffering Nothing)
+      BSB.hPutBuilder h dotFileContent
 
 data Key = Key { keyId :: !Word, keyName :: !BSL.ByteString }
   deriving (Eq, Ord, Show)
@@ -46,23 +69,31 @@ htmlEscape bs = foldl' doReplacement bs replacements
       , ('>', "&gt;")
       ]
 
-parseLogEvent :: BSL.ByteString -> Maybe LogEntry
-parseLogEvent ln = case BSL8.splitAt 6 ln of
-  ("entry§", rest) -> do
-    [keyName, curId, prevKey, prevId] <- pure $ breakLogLine rest
-    (curId', _) <- BSL8.readInt curId
-    let mPrevId' = do
-          (pId, _) <- BSL8.readInt prevId
-          pure $ Key (fromIntegral pId) prevKey
-    pure $ Entry (Key (fromIntegral curId') keyName) mPrevId'
-  ("trace§", rest) -> do
-    [keyName, curId, message] <- pure $ breakLogLine rest
-    (curId', _) <- BSL8.readInt curId
-    pure $ Trace (Key (fromIntegral curId') keyName) (htmlEscape message)
-  _ -> Nothing
+parseKey :: Atto.Parser Key
+parseKey = do
+  kName <- Atto.takeTill (== '§') <* Atto.char '§'
+  kId <- Atto.decimal <* Atto.char '§'
+  pure $ Key { keyId = kId, keyName = BSL.fromStrict kName }
 
-breakLogLine :: BSL.ByteString -> [BSL.ByteString]
-breakLogLine = BSL8.split '§'
+parseLogEntry :: Atto.Parser LogEntry
+parseLogEntry = (parseEntryEvent <|> parseTraceEvent) <* Atto.many' Atto.space
+
+parseEntryEvent :: Atto.Parser LogEntry
+parseEntryEvent = do
+  Atto.string "entry§"
+  curKey <- parseKey
+  mPrevKey <- Just <$> parseKey
+          <|> Nothing <$ Atto.string "§§"
+  Atto.many' Atto.space
+  pure $ Entry curKey mPrevKey
+
+parseTraceEvent :: Atto.Parser LogEntry
+parseTraceEvent = do
+  Atto.string "trace§"
+  key <- parseKey
+  message <- Atto.takeTill (== '§') <* Atto.char '§'
+  Atto.many' Atto.space
+  pure $ Trace key (htmlEscape $ BSL.fromStrict message)
 
 data NodeEntry
   = Message BSL.ByteString -- ^ The trace message

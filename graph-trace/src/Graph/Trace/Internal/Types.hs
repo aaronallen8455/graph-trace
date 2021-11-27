@@ -73,14 +73,14 @@ eventToLogStr (EntryEvent current mPrevious) =
     , BSL8.pack . show $ invocationId current
     , maybe "" keyStr mPrevious
     , maybe "" (BSL8.pack . show . invocationId) mPrevious
-    ]
+    ] <> "§"
 eventToLogStr (TraceEvent current message) =
   BSL8.intercalate "§"
     [ "trace"
     , keyStr current
     , BSL8.pack . show $ invocationId current
     , message
-    ]
+    ] <> "§"
 
 keyStr :: DebugTag -> BSL.ByteString
 keyStr

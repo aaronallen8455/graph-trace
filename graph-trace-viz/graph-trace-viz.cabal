@@ -29,4 +29,6 @@ executable graph-trace-viz
   build-depends: base
                , bytestring
                , containers
+               , directory
+               , attoparsec
   hs-source-dirs: app
