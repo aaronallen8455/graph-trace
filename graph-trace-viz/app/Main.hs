@@ -171,6 +171,7 @@ graphToDot graph = header <> graphContent <> "}"
           (Edge edgeKey, idx) ->
             let el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
                   <> color <> "\" PORT=\"" <> BSB.wordDec idx
+                  <> "\" HREF=\"#" <> keyStr edgeKey
                   <> "\"><FONT POINT-SIZE=\"8\">"
                   <> BSB.lazyByteString (htmlEscape $ keyName edgeKey)
                   <> "</FONT></TD></TR>"
