@@ -151,14 +151,15 @@ graphToDot graph = header <> graphContent <> "}"
                  <> acc
        in (acc', colors', colorMapAcc')
       where
-        keyStr (Key i k) = "\"" <> BSB.lazyByteString k <> BSB.wordDec i <> "\""
+        keyStr (Key i k) = BSB.lazyByteString k <> BSB.wordDec i
+        quoted bs = "\"" <> bs <> "\""
         mEdgeColor = M.lookup key finalColorMap
         nodeColor = case mEdgeColor of
                       Nothing -> ""
                       Just c -> "BGCOLOR=\"" <> c <> "\" "
         labelCell = "<TR><TD " <> nodeColor <> "><B>"
                  <> BSB.lazyByteString (htmlEscape $ keyName key) <> "</B></TD></TR>\n"
-        tableStart = keyStr key <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
+        tableStart = quoted (keyStr key) <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
         tableEnd :: BSB.Builder
         tableEnd = "</TABLE>>];"
 
@@ -169,17 +170,22 @@ graphToDot graph = header <> graphContent <> "}"
                   <> BSB.lazyByteString str <> "</TD></TR>"
              in (el : cs, es, colors, colorMap)
           (Edge edgeKey, idx) ->
-            let el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
-                  <> color <> "\" PORT=\"" <> BSB.wordDec idx
-                  <> "\" HREF=\"#" <> keyStr edgeKey
-                  <> "\"><FONT POINT-SIZE=\"8\">"
+            let href =
+                  case mEdge of
+                    Nothing -> mempty
+                    Just _ -> " HREF=\"#" <> keyStr edgeKey { keyName = htmlEscape $ keyName edgeKey } <> "\""
+                el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
+                  <> color <> "\" PORT=\"" <> BSB.wordDec idx <> "\""
+                  <> href
+                  <> "><FONT POINT-SIZE=\"8\">"
                   <> BSB.lazyByteString (htmlEscape $ keyName edgeKey)
                   <> "</FONT></TD></TR>"
                 mEdge = do
                   (_, targetContent) <- M.lookup edgeKey graph
                   guard . not $ null targetContent
                   Just $
-                    keyStr key <> ":" <> BSB.wordDec idx <> " -> " <> keyStr edgeKey
+                    quoted (keyStr key) <> ":" <> BSB.wordDec idx
+                    <> " -> " <> quoted (keyStr edgeKey)
                     <> " [colorscheme=set28 color=" <> color <> "];"
 
              in ( el : cs
