@@ -24,11 +24,20 @@ maintainer:         aaron@flipstone.com
 extra-source-files: CHANGELOG.md
 
 executable graph-trace-viz
-  default-language: Haskell2010
-  main-is: Main.hs
-  build-depends: base
-               , bytestring
-               , containers
-               , directory
-               , attoparsec
-  hs-source-dirs: app
+    main-is:          Main.hs
+
+    -- Modules included in this executable, other than Main.
+    -- other-modules:
+
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+    build-depends:    base,
+                      graph-trace-dot,
+                      process,
+                      bytestring,
+                      file-embed,
+                      directory
+    hs-source-dirs:   app
+    default-language: Haskell2010
+    extra-source-files: extras/*.html
+    ghc-options: -Wall

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  <meta charset="utf-8"/>
+  <script type="text/javascript">
+
+const nodeCoords = {};
+
+window.onload = function () {
+  const svgEl = document.getElementsByTagName("svg")[0].children[0];
+
+  for (let i = 0; i < svgEl.children.length; i++) {
+    const node = svgEl.children[i];
+    // filter out non-nodes
+    if (!node.classList.contains("node")) continue;
+
+    const nodeName = node.children[0].textContent;
+    const boundingRect = node.getBoundingClientRect();
+    const position =
+      { x: boundingRect.x + window.scrollX,
+        y: boundingRect.y + window.scrollY };
+
+    nodeCoords[nodeName] = position
+  }
+
+  function scrollToNode() {
+    const nodeName = location.hash.slice(1);
+    const pos = nodeCoords[decodeURI(nodeName)];
+    if (pos) {
+      window.scrollTo
+        ( pos.x - window.innerWidth / 2,
+          pos.y - window.innerHeight / 2 );
+    } else {
+      console.log('Node not found: ' + nodeName);
+    }
+  };
+
+  window.addEventListener('hashchange', scrollToNode, false);
+  console.log("Finished loading");
+};
+
+  </script>
+  </head>
+  <body>
