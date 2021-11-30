@@ -23,10 +23,11 @@ window.onload = function () {
     nodeCoords[nodeName] = position
   }
 
-  function scrollToNode() {
+  function scrollToNode(event) {
     const nodeName = location.hash.slice(1);
     const pos = nodeCoords[decodeURI(nodeName)];
     if (pos) {
+      event.preventDefault();
       window.scrollTo
         ( pos.x - window.innerWidth / 2,
           pos.y - window.innerHeight / 2 );

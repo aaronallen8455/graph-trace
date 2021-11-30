@@ -12,10 +12,11 @@ module Graph.Trace.Internal.Trace
   , omitTraces
   ) where
 
-import qualified Data.ByteString.Lazy as BSL
-import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Control.Concurrent.MVar
 import           Control.Monad
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy.Char8 as BSL8
+import           GHC.Stack (callStack, popCallStack)
 import           System.Environment (getProgName, lookupEnv)
 import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
@@ -32,7 +33,10 @@ trace !msg x =
       | otherwise ->
           unsafePerformIO $ do
           withMVar fileLock $ \h -> do
-            let ev = TraceEvent (currentTag ip) (BSL8.pack msg)
+            let ev = TraceEvent
+                       (currentTag ip)
+                       (BSL8.pack msg)
+                       (callStackToCallSite callStack)
             BSL.hPut h . (<> "\n") $ eventToLogStr ev
           pure x
 {-# NOINLINE trace  #-}
@@ -77,7 +81,12 @@ entry x =
       | omitTraces (propagation ip) -> x
       | otherwise -> unsafePerformIO $ do
           withMVar fileLock $ \h -> do
-            let ev = EntryEvent (currentTag ip) (previousTag ip)
+            let ev = EntryEvent
+                       (currentTag ip)
+                       (previousTag ip)
+                       (definitionSite ip)
+                       -- need to call popCallStack here to get actual call site
+                       (callStackToCallSite $ popCallStack callStack)
             BSL.hPut h . (<> "\n") $ eventToLogStr ev
           pure x
 {-# NOINLINE entry  #-}

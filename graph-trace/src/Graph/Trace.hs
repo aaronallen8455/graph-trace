@@ -286,7 +286,7 @@ modifyBinding
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
 modifyBinding nameMap entryName
-  bnd@Ghc.FunBind { Ghc.fun_id = Ghc.L _ name
+  bnd@Ghc.FunBind { Ghc.fun_id = Ghc.L loc name
                   , Ghc.fun_matches = mg@(Ghc.MG _ alts _) }
     | Just (mUserKey, prop) <- M.lookup name nameMap
     = do
@@ -294,7 +294,7 @@ modifyBinding nameMap entryName
                   Nothing -> Left $ Ghc.getOccString name
                   Just k -> Right $ Ghc.unpackFS k
 
-      whereBindExpr <- lift $ mkNewIpExpr key prop
+      whereBindExpr <- lift $ mkNewIpExpr loc key prop
 
       newAlts <-
         (traverse . traverse . traverse)
@@ -453,16 +453,25 @@ updateDebugIpInFunBind _ b = b
 -- the random ID has the advantage that a program can be run multiple times
 -- using the same log file and the traces won't conflict.
 mkNewIpExpr
-  :: Either FunName UserKey
+  :: Ghc.SrcSpan
+  -> Either FunName UserKey
   -> Propagation
   -> Ghc.TcM (Ghc.LHsExpr Ghc.GhcRn)
-mkNewIpExpr newKey newProp = do
+mkNewIpExpr srcSpan newKey newProp = do
+  let mDefSite = case Ghc.srcSpanStart srcSpan of
+                   Ghc.RealSrcLoc loc ->
+                     Just SrcCodeLoc
+                       { srcModule = Ghc.unpackFS $ Ghc.srcLocFile loc
+                       , srcLine = Ghc.srcLocLine loc
+                       , srcCol = Ghc.srcLocCol loc
+                       }
+                   _ -> Nothing
   Right exprPs
     <- fmap (Ghc.convertToHsExpr Ghc.Generated Ghc.noSrcSpan)
      . liftIO
      -- This sometimes gets floated out when optimizations are on. Until this
      -- can be fixed, should compile with -O0 when using the plugin.
-     $ TH.runQ [| noinline $ Just $ mkNewDebugContext newKey newProp ?_debug_ip |]
+     $ TH.runQ [| noinline $ Just $ mkNewDebugContext mDefSite newKey newProp ?_debug_ip |]
 
   (exprRn, _) <- Ghc.rnLExpr exprPs
 
@@ -470,11 +479,12 @@ mkNewIpExpr newKey newProp = do
 
 -- | Build a new debug context from the previous state
 mkNewDebugContext
-  :: Either FunName UserKey
+  :: Maybe DefinitionSite
+  -> Either FunName UserKey
   -> Propagation
   -> Maybe DebugContext
   -> DebugContext
-mkNewDebugContext newKey newProp mPrevCtx =
+mkNewDebugContext mDefSite newKey newProp mPrevCtx =
   case (mPrevCtx, newKey) of
     -- If override key matches with previous tag, keep the id
     (Just prevCtx, Right userKey)
@@ -491,6 +501,7 @@ mkNewDebugContext newKey newProp mPrevCtx =
         DC { previousTag = currentTag <$> mPrevCtx
            , currentTag = newTag
            , propagation = getNextProp (propagation <$> mPrevCtx)
+           , definitionSite = mDefSite
            }
   where
     getNextProp Nothing = newProp

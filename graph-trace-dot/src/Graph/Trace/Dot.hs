@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Graph.Trace.Dot
   ( parseLogEntries
@@ -19,19 +20,29 @@ import           Data.Foldable (foldl')
 import qualified Data.List as List
 import qualified Data.Map as M
 import           Data.Maybe (isJust)
+import           Data.Monoid (Alt(..))
 import           Data.Ord (Down(..))
 import           Data.Semigroup (Min(..))
 
 parseLogEntries :: BSL.ByteString -> Either String [LogEntry]
 parseLogEntries = AttoL.parseOnly (Atto.many' parseLogEntry <* Atto.endOfInput)
 
-data Key = Key { keyId :: !Word, keyName :: !BSL.ByteString }
+data Key = Key { keyId :: !Word
+               , keyName :: !BSL.ByteString
+               }
   deriving (Eq, Ord, Show)
 
 data LogEntry
-  = Entry Key (Maybe Key)
-  | Trace Key BSL.ByteString
+  = Entry Key (Maybe Key) (Maybe SrcCodeLoc) (Maybe SrcCodeLoc)
+  | Trace Key BSL.ByteString (Maybe SrcCodeLoc)
   deriving Show
+
+data SrcCodeLoc =
+  SrcCodeLoc
+    { srcMod :: BSL.ByteString
+    , srcLine :: Int
+    , srcCol :: Int
+    } deriving (Eq, Ord, Show)
 
 -- | Use this to escape special characters that appear in the HTML portion of
 -- the dot code. Other strings such as node names should not be escaped.
@@ -47,8 +58,8 @@ htmlEscape bs = foldl' doReplacement bs replacements
     replacements =
       [ ('<', "&lt;")
       , ('>', "&gt;")
-      , ('\\', "\\\\")
       , ('&', "&amp;")
+      , ('\\', "\\\\") -- not really an HTML escape, but still needed
       ]
 
 parseKey :: Atto.Parser Key
@@ -66,44 +77,66 @@ parseEntryEvent = do
   curKey <- parseKey
   mPrevKey <- Just <$> parseKey
           <|> Nothing <$ Atto.string "§§"
+  defSite <- parseSrcCodeLoc
+  callSite <- parseSrcCodeLoc
   _ <- Atto.many' Atto.space
-  pure $ Entry curKey mPrevKey
+  pure $ Entry curKey mPrevKey defSite callSite
 
 parseTraceEvent :: Atto.Parser LogEntry
 parseTraceEvent = do
   _ <- Atto.string "trace§"
   key <- parseKey
   message <- Atto.takeTill (== '§') <* Atto.char '§'
+  callSite <- parseSrcCodeLoc
   _ <- Atto.many' Atto.space
-  pure $ Trace key (htmlEscape $ BSL.fromStrict message)
+  pure $ Trace key (htmlEscape $ BSL.fromStrict message) callSite
+
+parseSrcCodeLoc :: Atto.Parser (Maybe SrcCodeLoc)
+parseSrcCodeLoc = do
+  let parseLoc = do
+        srcMod <- BSL.fromStrict <$> Atto.takeTill (== '§') <* Atto.char '§'
+        srcLine <- Atto.decimal <* Atto.char '§'
+        srcCol <- Atto.decimal <* Atto.char '§'
+        pure SrcCodeLoc{..}
+  Just <$> parseLoc <|> Nothing <$ Atto.string "§§§"
 
 data NodeEntry
-  = Message BSL.ByteString -- ^ The trace message
+  = Message BSL.ByteString  -- ^ The trace message
+            (Maybe SrcCodeLoc) -- ^ call site
   | Edge Key -- ^ Id of the invocation to link to
+         (Maybe SrcCodeLoc) -- ^ call site
   deriving Show
 
 -- Remembers the order in which the elements were inserted
-type Graph = M.Map Key (Min Int, [NodeEntry])
+type Graph = M.Map Key (Min Int, [NodeEntry], Alt Maybe SrcCodeLoc)
 
 buildGraph :: [LogEntry] -> Graph
 buildGraph = foldl' build mempty where
   build graph entry =
     case entry of
-      Trace tag msg ->
-        M.insertWith (<>) tag (graphSize, [Message msg]) graph
-      Entry curTag (Just prevTag) ->
-          M.insertWith (<>) curTag (graphSize + 1, [])
-        $ M.insertWith (<>) prevTag (graphSize, [Edge curTag]) graph
-      Entry curTag Nothing ->
-        M.insertWith (<>) curTag (graphSize, []) graph
+      Trace tag msg callSite ->
+        M.insertWith (<>)
+          tag
+          (graphSize, [Message msg callSite], Alt Nothing)
+          graph
+      Entry curTag (Just prevTag) defSite callSite ->
+          M.insertWith (<>)
+            curTag
+            (graphSize + 1, [], Alt defSite)
+        $ M.insertWith (<>)
+            prevTag
+            (graphSize, [Edge curTag callSite], Alt Nothing)
+            graph
+      Entry curTag Nothing defSite _ ->
+        M.insertWith (<>) curTag (graphSize, [], Alt defSite) graph
     where
       graphSize = Min $ M.size graph
 
 graphToDot :: Graph -> BSB.Builder
 graphToDot graph = header <> graphContent <> "}"
   where
-    orderedEntries = map (fmap snd)
-                   . List.sortOn (Down . fst . snd)
+    orderedEntries = map (\(key, (_, content, srcLoc)) -> (key, (content, getAlt srcLoc)))
+                   . List.sortOn (Down . (\(x,_,_) -> x) . snd)
                    $ M.toList graph
     graphContent =
       -- knot-tying is used to get the color of a node from the edge pointing to that node.
@@ -119,7 +152,7 @@ graphToDot graph = header <> graphContent <> "}"
     header :: BSB.Builder
     header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
 
-    doNode finalColorMap (acc, colors, colorMapAcc) (key, entries) =
+    doNode finalColorMap (acc, colors, colorMapAcc) (key, (entries, mSrcLoc)) =
       let (cells, edges, colors', colorMapAcc')
             = foldl' doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
           acc' =
@@ -139,31 +172,34 @@ graphToDot graph = header <> graphContent <> "}"
         nodeColor = case mEdgeColor of
                       Nothing -> ""
                       Just c -> "BGCOLOR=\"" <> c <> "\" "
-        labelCell = "<TR><TD " <> nodeColor <> "><B>"
+        labelCell = "<TR><TD HREF=\"\" TOOLTIP=\"" <> foldMap pprSrcCodeLoc mSrcLoc
+                 <> "\" " <> nodeColor <> "><B>"
                  <> BSB.lazyByteString (htmlEscape $ keyName key) <> "</B></TD></TR>\n"
         tableStart = quoted (keyStr key) <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
         tableEnd :: BSB.Builder
         tableEnd = "</TABLE>>];"
 
         doEntry (cs, es, colors'@(color:nextColors), colorMap) ev = case ev of
-          (Message str, idx) ->
-            let el = "<TR><TD ALIGN=\"LEFT\" PORT=\""
+          (Message str mCallSite, idx) ->
+            let el = "<TR><TD HREF=\"\" TOOLTIP=\"" <> foldMap pprSrcCodeLoc mCallSite
+                  <> "\" ALIGN=\"LEFT\" PORT=\""
                   <> BSB.wordDec idx <> "\">"
                   <> BSB.lazyByteString str <> "</TD></TR>"
              in (el : cs, es, colors', colorMap)
-          (Edge edgeKey, idx) ->
+          (Edge edgeKey mCallSite, idx) ->
             let href =
                   case mEdge of
-                    Nothing -> mempty
+                    Nothing -> " HREF=\"\""
                     Just _ -> " HREF=\"#" <> keyStr edgeKey { keyName = htmlEscape $ keyName edgeKey } <> "\""
-                el = "<TR><TD ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
+                el = "<TR><TD TOOLTIP=\"" <> foldMap pprSrcCodeLoc mCallSite
+                  <> "\" ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
                   <> color <> "\" PORT=\"" <> BSB.wordDec idx <> "\""
                   <> href
                   <> "><FONT POINT-SIZE=\"8\">"
                   <> BSB.lazyByteString (htmlEscape $ keyName edgeKey)
                   <> "</FONT></TD></TR>"
                 mEdge = do
-                  (_, targetContent) <- M.lookup edgeKey graph
+                  (_, targetContent, _) <- M.lookup edgeKey graph
                   guard . not $ null targetContent
                   Just $
                     quoted (keyStr key) <> ":" <> BSB.wordDec idx
@@ -179,3 +215,9 @@ graphToDot graph = header <> graphContent <> "}"
 
 edgeColors :: [BSB.Builder]
 edgeColors = BSB.intDec <$> [1..8 :: Int]
+
+pprSrcCodeLoc :: SrcCodeLoc -> BSB.Builder
+pprSrcCodeLoc loc
+  = BSB.lazyByteString (srcMod loc) <> ":"
+ <> BSB.intDec (srcLine loc) <> ":"
+ <> BSB.intDec (srcCol loc)

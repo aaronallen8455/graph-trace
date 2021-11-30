@@ -7,6 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE BangPatterns #-}
 
 import           Control.Monad
 import           Control.Concurrent
@@ -40,7 +41,7 @@ test' = do
         another
           where letWhere = trace ("hello" \/& "two") pure ()
   inLet
-  another
+  !_ <- another
   let letBound = letBoundThing
   trace letBound pure ()
   trace "leaving" pure ()
@@ -52,14 +53,10 @@ test' = do
             innerWhere :: Debug => IO ()
             innerWhere = trace "innerWhere" pure ()
 
--- goose :: Goose
--- goose@(Goose _ _) = Goose () ()
--- 
--- data Goose = Goose () ()
-
 another :: Debug => IO ()
 another
-  | trace "another" True = pure ()
+  | trace "another" True = do
+    pure ()
   | otherwise = pure ()
 
 andAnother :: Debug => IO ()

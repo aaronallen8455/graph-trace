@@ -8,6 +8,9 @@ module Graph.Trace.Internal.Types
   ( DebugTag(..)
   , DebugContext(..)
   , Propagation(..)
+  , SrcCodeLoc(..)
+  , DefinitionSite
+  , CallSite
   , DebugIP
   , DebugMute
   , DebugDeep
@@ -19,10 +22,15 @@ module Graph.Trace.Internal.Types
   , eventToLogStr
   , FunName
   , UserKey
+  , SrcModule
+  , SrcLine
+  , SrcCol
+  , callStackToCallSite
   ) where
 
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
+import           GHC.Stack
 import           GHC.TypeLits
 import qualified Language.Haskell.TH.Syntax as TH
 
@@ -34,12 +42,27 @@ data Propagation
   deriving (Eq, Show, TH.Lift)
 
 data DebugContext =
-  DC { previousTag :: Maybe DebugTag
-     , currentTag :: DebugTag
-     , propagation :: Propagation
+  DC { previousTag :: !(Maybe DebugTag)
+     , currentTag :: {-# UNPACK #-} !DebugTag
+     , propagation :: !Propagation
+     , definitionSite :: !(Maybe DefinitionSite)
      }
 
-type DebugIP = (?_debug_ip :: Maybe DebugContext)
+data SrcCodeLoc =
+  SrcCodeLoc
+    { srcModule :: !SrcModule
+    , srcLine :: !SrcLine
+    , srcCol :: !SrcCol
+    } deriving TH.Lift
+
+type SrcModule = String
+type SrcLine = Int
+type SrcCol = Int
+
+type DefinitionSite = SrcCodeLoc
+type CallSite = SrcCodeLoc
+
+type DebugIP = (?_debug_ip :: Maybe DebugContext, HasCallStack)
 type DebugMute = DebugIP
 type DebugDeep = DebugIP
 type DebugDeepKey (key :: Symbol) = DebugIP
@@ -59,28 +82,55 @@ data DebugTag =
 
 data Event
   = EntryEvent
-      DebugTag -- ^ Current context
-      (Maybe DebugTag) -- ^ caller's context
+      !DebugTag -- ^ Current context
+      !(Maybe DebugTag) -- ^ caller's context
+      !(Maybe DefinitionSite)
+      !(Maybe CallSite)
   | TraceEvent
-      DebugTag
-      MessageContent
+      !DebugTag
+      !MessageContent
+      !(Maybe CallSite)
 
+callStackToCallSite :: CallStack -> Maybe CallSite
+callStackToCallSite cs =
+  case getCallStack cs of
+    (_, srcLoc) : _ ->
+      Just SrcCodeLoc
+        { srcModule = srcLocFile srcLoc
+        , srcLine = srcLocStartLine srcLoc
+        , srcCol = srcLocStartCol srcLoc
+        }
+    _ -> Nothing
+
+-- | Serialize an Event. The § character is used as both a separator and
+-- terminator. Don't use this character in trace messages, it will break!
 eventToLogStr :: Event -> BSL.ByteString
-eventToLogStr (EntryEvent current mPrevious) =
+eventToLogStr (EntryEvent current mPrevious mDefSite mCallSite) =
   BSL8.intercalate "§"
     [ "entry"
     , keyStr current
     , BSL8.pack . show $ invocationId current
     , maybe "" keyStr mPrevious
     , maybe "" (BSL8.pack . show . invocationId) mPrevious
+    , srcCodeLocToLogStr mDefSite
+    , srcCodeLocToLogStr mCallSite
     ] <> "§"
-eventToLogStr (TraceEvent current message) =
+eventToLogStr (TraceEvent current message mCallSite) =
   BSL8.intercalate "§"
     [ "trace"
     , keyStr current
     , BSL8.pack . show $ invocationId current
     , message
+    , srcCodeLocToLogStr mCallSite
     ] <> "§"
+
+srcCodeLocToLogStr :: Maybe SrcCodeLoc -> BSL.ByteString
+srcCodeLocToLogStr mLoc =
+  BSL8.intercalate "§"
+    [ foldMap (BSL8.pack . srcModule) mLoc
+    , foldMap (BSL8.pack . show . srcLine) mLoc
+    , foldMap (BSL8.pack . show . srcCol) mLoc
+    ]
 
 keyStr :: DebugTag -> BSL.ByteString
 keyStr
