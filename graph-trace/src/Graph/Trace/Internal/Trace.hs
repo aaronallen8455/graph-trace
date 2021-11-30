@@ -23,38 +23,49 @@ import           System.IO.Unsafe (unsafePerformIO)
 
 import           Graph.Trace.Internal.Types
 
-trace :: DebugIP => String -> a -> a
+mkTraceEvent :: DebugIP => String -> Maybe Event
+mkTraceEvent !msg = do
+  ip <- ?_debug_ip
+  guard . not $ omitTraces (propagation ip)
+  pure $
+    TraceEvent
+      (currentTag ip)
+      (BSL8.pack msg)
+      (callStackToCallSite . popCallStack $ popCallStack callStack)
+
+writeEventToLog :: Event -> IO ()
 -- forcing msg is required here since the file MVar could be entagled with it
-trace !msg x =
-  case ?_debug_ip of
-    Nothing -> x
-    Just ip
-      | omitTraces (propagation ip) -> x
-      | otherwise ->
-          unsafePerformIO $ do
-          withMVar fileLock $ \h -> do
-            let ev = TraceEvent
-                       (currentTag ip)
-                       (BSL8.pack msg)
-                       (callStackToCallSite callStack)
-            BSL.hPut h . (<> "\n") $ eventToLogStr ev
-          pure x
+writeEventToLog event =
+  withMVar fileLock $ \h ->
+    BSL.hPut h . (<> "\n") $ eventToLogStr event
+
+unsafeWriteTrace :: DebugIP => String -> a -> a
+unsafeWriteTrace !msg thing =
+  unsafePerformIO $ do
+    case mkTraceEvent msg of
+      Nothing -> pure ()
+      Just event -> writeEventToLog event
+    pure thing
+{-# NOINLINE unsafeWriteTrace  #-}
+
+trace :: DebugIP => String -> a -> a
+trace = unsafeWriteTrace
 {-# NOINLINE trace  #-}
 
 traceId :: DebugIP => String -> String
-traceId = join trace
+traceId = join unsafeWriteTrace
 
-traceShow :: DebugIP => Show a => a -> b -> b
-traceShow = trace . show
+traceShow :: (DebugIP, Show a) => a -> b -> b
+traceShow = unsafeWriteTrace . show
 
-traceShowId :: DebugIP => Show a => a -> a
-traceShowId = join traceShow
+traceShowId :: (DebugIP, Show a) => a -> a
+traceShowId = join (unsafeWriteTrace . show)
 
 traceM :: (Applicative f, DebugIP) => String -> f ()
-traceM x = trace x $ pure ()
+traceM x = unsafeWriteTrace x $ pure ()
 
 traceShowM :: (Applicative f, Show a, DebugIP) => a -> f ()
-traceShowM = traceM . show
+traceShowM x = unsafeWriteTrace (show x) $ pure ()
 
 -- | Serializes access to the debug log file
 fileLock :: MVar Handle

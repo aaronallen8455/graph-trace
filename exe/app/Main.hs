@@ -28,6 +28,7 @@ test' :: IO ()
 test' = do
   andAnother
   trace "test\ntest" pure ()
+  traceM "yo"
   putStrLn $ deff (I 3)
   x <- readLn
   case x of
