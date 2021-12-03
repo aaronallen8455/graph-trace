@@ -15,6 +15,8 @@ module Graph.Trace.Internal.GhcFacade
   , noLoc'
   , emptyComments'
   , pattern HsQualTy'
+  , pattern RealSrcLoc'
+  , pattern L'
   ) where
 
 #if MIN_VERSION_ghc(9,2,0)
@@ -208,4 +210,20 @@ pattern HsQualTy' x lctx body
     where
       HsQualTy' x Nothing body = HsQualTy x (noLoc []) body
       HsQualTy' x (Just lctx) body = HsQualTy x lctx body
+#endif
+
+pattern RealSrcLoc' :: RealSrcLoc -> SrcLoc
+#if MIN_VERSION_ghc(9,0,0)
+pattern RealSrcLoc' loc = RealSrcLoc loc Nothing
+#else
+pattern RealSrcLoc' loc = RealSrcLoc loc
+#endif
+
+pattern L' :: SrcSpan -> a
+#if MIN_VERSION_ghc(9,2,0)
+           -> GenLocated (SrcSpanAnn' ann) a
+pattern L' ss a <- L (SrcSpanAnn _ ss) a
+#else
+           -> Located a
+pattern L' ss a <- L ss a
 #endif
