@@ -6,6 +6,13 @@
 
 const nodeCoords = {};
 
+function scrollToPosition (x, y) {
+  window.scrollTo (
+    x - window.innerWidth / 2,
+    y - window.innerHeight / 2
+  );
+};
+
 window.onload = function () {
   const svgEl = document.getElementsByTagName("svg")[0].children[0];
 
@@ -28,15 +35,20 @@ window.onload = function () {
     const pos = nodeCoords[decodeURI(nodeName)];
     if (pos) {
       event.preventDefault();
-      window.scrollTo
-        ( pos.x - window.innerWidth / 2,
-          pos.y - window.innerHeight / 2 );
+      scrollToPosition(pos.x, pos.y);
     } else {
       console.log('Node not found: ' + nodeName);
     }
   };
 
   window.addEventListener('hashchange', scrollToNode, false);
+
+  // Scroll to first node
+  const firstNodePos = nodeCoords[Object.keys(nodeCoords)[0]];
+  if (firstNodePos) {
+    scrollToPosition(firstNodePos.x, firstNodePos.y);
+  }
+
   console.log("Finished loading");
 };
 

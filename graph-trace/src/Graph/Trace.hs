@@ -228,6 +228,8 @@ addConstraintToSigType debugNames debugAllFlag names sig@(Ghc.HsSig' t) = do
             | foundPred : _ <-
                 mapMaybe (checkForDebugPred debugNames)
                   (Ghc.unLoc <$> foldMap Ghc.unLoc ctx)
+            -- Note that DebugMuted bindings should still be included because
+            -- the muted status needs to be inherited by the functions called from it
             -> do tell (M.fromList $ names `zip` repeat foundPred)
                   pure q
             | otherwise -> do

@@ -173,7 +173,8 @@ graphToDot graph = header <> graphContent <> "}"
         nodeColor = case mEdgeColor of
                       Nothing -> ""
                       Just c -> "BGCOLOR=\"" <> c <> "\" "
-        labelCell = "<TR><TD HREF=\"\" TOOLTIP=\"" <> foldMap pprSrcCodeLoc mSrcLoc
+        nodeToolTip = foldMap (("defined at " <>) . pprSrcCodeLoc) mSrcLoc
+        labelCell = "<TR><TD HREF=\"\" TOOLTIP=\"" <> nodeToolTip
                  <> "\" " <> nodeColor <> "><B>"
                  <> BSB.byteString (htmlEscape $ keyName key) <> "</B></TD></TR>\n"
         tableStart = quoted (keyStr key) <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
@@ -182,7 +183,9 @@ graphToDot graph = header <> graphContent <> "}"
 
         doEntry (cs, es, colors'@(color:nextColors), colorMap) ev = case ev of
           (Message str mCallSite, idx) ->
-            let el = "<TR><TD HREF=\"\" TOOLTIP=\"" <> foldMap pprSrcCodeLoc mCallSite
+            let msgToolTip =
+                  foldMap (("printed at " <>) . pprSrcCodeLoc) mCallSite
+                el = "<TR><TD HREF=\"\" TOOLTIP=\"" <> msgToolTip
                   <> "\" ALIGN=\"LEFT\" PORT=\""
                   <> BSB.wordDec idx <> "\">"
                   <> BSB.byteString str <> "</TD></TR>"
@@ -192,7 +195,9 @@ graphToDot graph = header <> graphContent <> "}"
                   case mEdge of
                     Nothing -> " HREF=\"\""
                     Just _ -> " HREF=\"#" <> keyStr edgeKey { keyName = htmlEscape $ keyName edgeKey } <> "\""
-                el = "<TR><TD TOOLTIP=\"" <> foldMap pprSrcCodeLoc mCallSite
+                edgeToolTip =
+                  foldMap (("called at " <>) . pprSrcCodeLoc) mCallSite
+                el = "<TR><TD TOOLTIP=\"" <> edgeToolTip
                   <> "\" ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
                   <> color <> "\" PORT=\"" <> BSB.wordDec idx <> "\""
                   <> href
