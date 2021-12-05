@@ -157,7 +157,8 @@ graphToDot graph = header <> graphContent <> "}"
       let (cells, edges, colors', colorMapAcc')
             = foldl' doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
           acc' =
-            if null entries && isJust mEdgeColor
+            -- don't render nodes that have in inbound edge but no content
+            if null entries && isJust mEdgeData
                then acc
                else tableStart
                  <> labelCell
@@ -168,19 +169,28 @@ graphToDot graph = header <> graphContent <> "}"
        in (acc', colors', colorMapAcc')
       where
         keyStr (Key i k) = BSB.byteString k <> BSB.wordDec i
+        keyStrEsc k = keyStr k { keyName = htmlEscape $ keyName k }
         quoted bs = "\"" <> bs <> "\""
-        mEdgeColor = M.lookup key finalColorMap
-        nodeColor = case mEdgeColor of
+        -- Building a node
+        mEdgeData = M.lookup key finalColorMap
+        nodeColor = case mEdgeData of
                       Nothing -> ""
-                      Just c -> "BGCOLOR=\"" <> c <> "\" "
+                      Just (_, c) -> "BGCOLOR=" <> quoted c <> " "
         nodeToolTip = foldMap (("defined at " <>) . pprSrcCodeLoc) mSrcLoc
-        labelCell = "<TR><TD HREF=\"\" TOOLTIP=\"" <> nodeToolTip
-                 <> "\" " <> nodeColor <> "><B>"
-                 <> BSB.byteString (htmlEscape $ keyName key) <> "</B></TD></TR>\n"
+        backHref = case mEdgeData of
+                     Nothing -> "HREF=\"\""
+                     Just (k, _) -> "HREF=\"#" <> keyStrEsc k <> "\""
+        labelCell = "<TR>" <> "<TD " <> backHref <> " TOOLTIP=\"" <> nodeToolTip
+                 <> "\" " <> nodeColor <> ">"
+                 <> foldMap (const "<FONT POINT-SIZE=\"7\">&larr;</FONT> ") mEdgeData
+                 <> "<B>"
+                 <> BSB.byteString (htmlEscape $ keyName key)
+                 <> "</B></TD></TR>\n"
         tableStart = quoted (keyStr key) <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
         tableEnd :: BSB.Builder
         tableEnd = "</TABLE>>];"
 
+        -- Building an entry in a node
         doEntry (cs, es, colors'@(color:nextColors), colorMap) ev = case ev of
           (Message str mCallSite, idx) ->
             let msgToolTip =
@@ -194,7 +204,7 @@ graphToDot graph = header <> graphContent <> "}"
             let href =
                   case mEdge of
                     Nothing -> " HREF=\"\""
-                    Just _ -> " HREF=\"#" <> keyStr edgeKey { keyName = htmlEscape $ keyName edgeKey } <> "\""
+                    Just _ -> " HREF=\"#" <> keyStrEsc edgeKey <> "\""
                 edgeToolTip =
                   foldMap (("called at " <>) . pprSrcCodeLoc) mCallSite
                 el = "<TR><TD TOOLTIP=\"" <> edgeToolTip
@@ -215,7 +225,7 @@ graphToDot graph = header <> graphContent <> "}"
              in ( el : cs
                 , maybe id (:) mEdge es
                 , nextColors
-                , M.insert edgeKey color colorMap
+                , M.insert edgeKey (key, color) colorMap
                 )
         doEntry ac _ = ac
 
