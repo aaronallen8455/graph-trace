@@ -54,8 +54,9 @@ writeSvg htmlFile dotContent =
   Proc.withCreateProcess (Proc.proc "dot" ["-Tsvg"])
       { Proc.std_in = Proc.CreatePipe
       , Proc.std_out = Proc.CreatePipe
-      } $
-    \(Just stdIn) (Just stdOut) _ _ -> do
+      } go
+  where
+    go (Just stdIn) (Just stdOut) _ _ = do
       hSetBinaryMode stdIn True
       hSetBuffering stdIn (BlockBuffering Nothing)
       hSetBinaryMode stdOut True
@@ -65,3 +66,5 @@ writeSvg htmlFile dotContent =
       svg <- BSL.hGetContents stdOut
       BSL.hPut htmlFile svg
       hClose stdOut
+    go _ _ _ _ = pure ()
+

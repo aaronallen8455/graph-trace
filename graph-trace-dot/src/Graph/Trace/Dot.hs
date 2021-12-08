@@ -220,7 +220,7 @@ graphToDot graph = header <> graphContent <> "}"
                   Just $
                     quoted (keyStr key) <> ":" <> BSB.wordDec idx
                     <> " -> " <> quoted (keyStr edgeKey)
-                    <> " [colorscheme=set28 color=" <> color <> "];"
+                    <> " [tooltip=\" \" colorscheme=set28 color=" <> color <> "];"
 
              in ( el : cs
                 , maybe id (:) mEdge es
