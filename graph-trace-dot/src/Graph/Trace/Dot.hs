@@ -34,7 +34,11 @@ data Key = Key { keyId :: !Word
   deriving (Eq, Ord, Show)
 
 data LogEntry
-  = Entry Key (Maybe Key) (Maybe SrcCodeLoc) (Maybe SrcCodeLoc)
+  = Entry
+      Key
+      (Maybe Key)
+      (Maybe SrcCodeLoc) -- definition site
+      (Maybe SrcCodeLoc) -- call site
   | Trace Key BS.ByteString (Maybe SrcCodeLoc)
   deriving Show
 
@@ -109,7 +113,11 @@ data NodeEntry
   deriving Show
 
 -- Remembers the order in which the elements were inserted
-type Graph = M.Map Key (Min Int, [NodeEntry], Alt Maybe SrcCodeLoc)
+type Graph =
+  M.Map Key ( Min Int -- order
+            , [NodeEntry] -- contents
+            , Alt Maybe SrcCodeLoc -- definition site
+            )
 
 buildGraph :: [LogEntry] -> Graph
 buildGraph = foldl' build mempty where
@@ -205,9 +213,9 @@ graphToDot graph = header <> graphContent <> "}"
                   case mEdge of
                     Nothing -> " HREF=\"\""
                     Just _ -> " HREF=\"#" <> keyStrEsc edgeKey <> "\""
-                edgeToolTip =
+                elToolTip =
                   foldMap (("called at " <>) . pprSrcCodeLoc) mCallSite
-                el = "<TR><TD TOOLTIP=\"" <> edgeToolTip
+                el = "<TR><TD TOOLTIP=\"" <> elToolTip
                   <> "\" ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
                   <> color <> "\" PORT=\"" <> BSB.wordDec idx <> "\""
                   <> href

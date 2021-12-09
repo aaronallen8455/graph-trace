@@ -138,6 +138,8 @@ modifyBinds nameMap entryName =
     (modifyBinding nameMap entryName)
 
 -- | Instrument value bindings that have a signature with a debug pred.
+-- This gets applied to both top level bindings as well as arbitrarily nested
+-- value bindings.
 modifyValBinds
   :: DebugNames
   -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
@@ -295,6 +297,8 @@ modifyBinding nameMap entryName
           alts
 
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
+-- modifyBinding nameMap entryName
+--   bnd@Ghc.PatBind{} = DT.trace "PAT BIND" pure bnd
 modifyBinding _ _ bnd = pure bnd
 
 mkWhereBindName :: Ghc.TcM Ghc.Name
@@ -435,6 +439,11 @@ updateDebugIpInFunBind whereVarName
 #if !(MIN_VERSION_ghc(9,0,0))
     updateMatch x = x
 #endif
+updateDebugIpInFunBind whereVarName
+    b@Ghc.PatBind{ Ghc.pat_rhs = g@Ghc.GRHSs{ Ghc.grhssGRHSs = grhss } }
+  = b { Ghc.pat_rhs =
+          g{ Ghc.grhssGRHSs = fmap (updateDebugIPInGRHS whereVarName) <$> grhss }
+      }
 updateDebugIpInFunBind _ b = b
 
 -- | Produce the contents of the where binding that contains the new debug IP

@@ -214,7 +214,7 @@ pattern HsQualTy' x lctx body
 
 pattern RealSrcLoc' :: RealSrcLoc -> SrcLoc
 #if MIN_VERSION_ghc(9,0,0)
-pattern RealSrcLoc' loc = RealSrcLoc loc Nothing
+pattern RealSrcLoc' loc <- RealSrcLoc loc _
 #else
 pattern RealSrcLoc' loc = RealSrcLoc loc
 #endif
