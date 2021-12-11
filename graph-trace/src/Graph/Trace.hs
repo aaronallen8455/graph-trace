@@ -22,7 +22,6 @@ import qualified Data.Generics as Syb
 import qualified Data.Map.Strict as M
 import           Data.Maybe
 import qualified Data.Set as S
-import           GHC.Magic (noinline)
 import qualified Language.Haskell.TH as TH
 import           System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Rand
@@ -77,6 +76,7 @@ renamedResultAction cmdLineOptions tcGblEnv
   debugKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugKey")
   debugInertPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugInert")
   entryName <- Ghc.lookupOrig debugTraceModule (Ghc.mkVarOcc "entry")
+  debugContextName <- Ghc.lookupOrig debugTypesModule (Ghc.mkTcOcc "DebugContext")
 
   let debugNames = DebugNames{..}
 
@@ -124,18 +124,19 @@ data DebugNames =
     , debugKeyPredName :: Ghc.Name
     , debugInertPredName :: Ghc.Name
     , entryName :: Ghc.Name
+    , debugContextName :: Ghc.Name
     }
 
 -- | Instrument a set of bindings given a Map containing the names of functions
 -- that should be modified.
 modifyBinds
   :: M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
-  -> Ghc.Name
+  -> DebugNames
   -> Ghc.LHsBinds Ghc.GhcRn
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.LHsBinds Ghc.GhcRn)
-modifyBinds nameMap entryName =
+modifyBinds nameMap debugNames =
   (traverse . traverse)
-    (modifyBinding nameMap entryName)
+    (modifyBinding nameMap debugNames)
 
 -- | Instrument value bindings that have a signature with a debug pred.
 -- This gets applied to both top level bindings as well as arbitrarily nested
@@ -148,7 +149,7 @@ modifyValBinds
 modifyValBinds debugNames nameMap (Ghc.NValBinds binds sigs) = do
   binds' <-
     (traverse . traverse)
-      (modifyBinds nameMap (entryName debugNames))
+      (modifyBinds nameMap debugNames)
       binds
   modify' (S.union $ M.keysSet nameMap)
   pure $ Ghc.NValBinds binds' sigs
@@ -163,7 +164,7 @@ modifyTyClDecl
 modifyTyClDecl debugNames nameMap
     cd@Ghc.ClassDecl { Ghc.tcdMeths = meths
                      } = do
-  newMeths <- modifyBinds nameMap (entryName debugNames) meths
+  newMeths <- modifyBinds nameMap debugNames meths
   pure cd { Ghc.tcdMeths = newMeths }
 modifyTyClDecl _ _ x = pure x
 
@@ -177,7 +178,7 @@ modifyClsInstDecl
 modifyClsInstDecl debugNames nameMap
     inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds }
       = do
-  newBinds <- modifyBinds nameMap (entryName debugNames) binds
+  newBinds <- modifyBinds nameMap debugNames binds
   pure inst { Ghc.cid_binds = newBinds }
 #if !(MIN_VERSION_ghc(9,0,0))
 modifyClsInstDecl _ _ x = pure x
@@ -277,10 +278,10 @@ checkForDebugPred _ _ = Nothing
 -- | Instrument a binding if its name is in the Map.
 modifyBinding
   :: M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
-  -> Ghc.Name
+  -> DebugNames
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
-modifyBinding nameMap entryName
+modifyBinding nameMap debugNames
   bnd@Ghc.FunBind { Ghc.fun_id = Ghc.L' loc name
                   , Ghc.fun_matches = mg@(Ghc.MG _ alts _) }
     | Just (mUserKey, prop) <- M.lookup name nameMap
@@ -293,7 +294,7 @@ modifyBinding nameMap entryName
 
       newAlts <-
         (traverse . traverse . traverse)
-          (modifyMatch prop whereBindExpr entryName)
+          (modifyMatch prop whereBindExpr debugNames)
           alts
 
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
@@ -345,10 +346,10 @@ mkWhereBinding whereBindName whereBindExpr =
 modifyMatch
   :: Propagation
   -> Ghc.LHsExpr Ghc.GhcRn
-  -> Ghc.Name
+  -> DebugNames
   -> Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)
   -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.Match Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn))
-modifyMatch prop whereBindExpr entryName match = do
+modifyMatch prop whereBindExpr debugNames match = do
   whereBindName <- lift mkWhereBindName
 
   visitedNames <- get
@@ -385,17 +386,49 @@ modifyMatch prop whereBindExpr entryName match = do
 
       wrappedBind = (Ghc.NonRecursive, Ghc.unitBag ipValWhereBind)
 
+      -- NOINLINE pragma
+      noInlineSig :: Ghc.LSig Ghc.GhcRn
+      noInlineSig = Ghc.noLocA' $
+        Ghc.InlineSig
+          Ghc.emptyEpAnn
+          (Ghc.noLocA' whereBindName)
+          Ghc.neverInlinePragma
+
+      -- type sig for 'Maybe DebugContext'
+      whereBindSig :: Ghc.LSig Ghc.GhcRn
+      whereBindSig = Ghc.noLocA' $
+        Ghc.TypeSig
+          Ghc.emptyEpAnn
+          [Ghc.noLocA' whereBindName] $
+            Ghc.HsWC [] $
+              Ghc.noLocA' $
+                Ghc.HsSig
+                  { Ghc.sig_ext = Ghc.NoExtField
+                  , Ghc.sig_bndrs = Ghc.HsOuterImplicit []
+                  , Ghc.sig_body = Ghc.noLocA' $
+                      Ghc.HsAppTy Ghc.NoExtField
+                        (Ghc.noLocA' . Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted
+                          $ Ghc.noLocA' Ghc.maybeTyConName)
+                        (Ghc.noLocA' . Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted .
+                           Ghc.noLocA' $ debugContextName debugNames
+                        )
+                  }
+
       -- add the generated bind to the function's where clause
       whereBinds' =
         case whereBinds of
           Ghc.EmptyLocalBinds _ ->
             Ghc.HsValBinds Ghc.emptyEpAnn
-              (Ghc.XValBindsLR (Ghc.NValBinds [wrappedBind] []))
+              (Ghc.XValBindsLR
+                (Ghc.NValBinds [wrappedBind] [noInlineSig, whereBindSig])
+              )
 
           Ghc.HsValBinds x (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) ->
              Ghc.HsValBinds x
                (Ghc.XValBindsLR
-                 (Ghc.NValBinds (wrappedBind : binds) sigs
+                 (Ghc.NValBinds
+                   (wrappedBind : binds)
+                   (noInlineSig : whereBindSig : sigs)
                  )
                )
 
@@ -413,7 +446,7 @@ modifyMatch prop whereBindExpr entryName match = do
                      -- Don't emit entry event if propagation is Mute
                           . if prop == Mute
                                then id
-                               else emitEntryEvent entryName
+                               else emitEntryEvent (entryName debugNames)
                           )
                        <$> grhsList
                  }
@@ -470,7 +503,7 @@ mkNewIpExpr srcSpan newKey newProp = do
      . liftIO
      -- This sometimes gets floated out when optimizations are on. Until this
      -- can be fixed, should compile with -O0 when using the plugin.
-     $ TH.runQ [| noinline $ Just $ mkNewDebugContext mDefSite newKey newProp ?_debug_ip |]
+     $ TH.runQ [| Just $ mkNewDebugContext mDefSite newKey newProp ?_debug_ip |]
 
   (exprRn, _) <- Ghc.rnLExpr exprPs
 
