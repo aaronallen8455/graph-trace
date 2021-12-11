@@ -142,9 +142,13 @@ pattern FunBind'
 pattern HsSig' ty
 #if MIN_VERSION_ghc(9,2,0)
   <- L _ (HsSig _ _ ty)
-pattern HsSig' :: LHsType GhcRn -> GenLocated l (HsSigType GhcRn)
+    where
+      HsSig' ty = L noSrcSpanA $ HsSig NoExtField (HsOuterImplicit []) ty
+pattern HsSig' :: LHsType GhcRn -> LHsSigType Ghc.GhcRn
 #else
   <- HsIB _ ty
+    where
+      HsSig' ty = HsIB [] ty
 pattern HsSig' :: LHsType GhcRn -> HsImplicitBndrs GhcRn (LHsType GhcRn)
 #endif
 

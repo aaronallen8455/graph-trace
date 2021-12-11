@@ -9,7 +9,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE NoMonomorphismRestriction #-}
+--{-# LANGUAGE NoMonomorphismRestriction #-}
 
 import           Control.Monad
 import           Control.Concurrent
@@ -20,25 +20,12 @@ import Class
 import qualified System.Random as Rand
 import           System.IO.Unsafe
 
--- main :: IO ()
--- main = let ?x = "testing" in print test
--- --   where
--- --     test :: ()
--- --     test =
--- --       let x = ?x
--- --        in x
--- 
--- test :: (?x :: String) => String
--- test = tt where
---   tt :: String
---   tt = ?x
-
 main :: DebugDeep => IO ()
 main = trace bah print unassuming >> buzzard
   where
     --unassuming :: Either Bool Int
-    -- thisIsABoolean :: Bool
-    unassuming@(Left True) =
+    --thisIsABoolean :: Bool
+    unassuming@(Left thisIsABoolean@True) =
       trace bah $! (Left True :: Either Bool Int)
 
     buzzard = do

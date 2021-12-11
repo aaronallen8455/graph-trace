@@ -394,25 +394,23 @@ modifyMatch prop whereBindExpr debugNames match = do
           (Ghc.noLocA' whereBindName)
           Ghc.neverInlinePragma
 
-      -- type sig for 'Maybe DebugContext'
+      -- Type sig for 'Maybe DebugContext'
+      -- Without an explicit signature for the where binding,
+      -- -XNoMonomorphismRestriction causes it to be inlined.
       whereBindSig :: Ghc.LSig Ghc.GhcRn
       whereBindSig = Ghc.noLocA' $
         Ghc.TypeSig
           Ghc.emptyEpAnn
           [Ghc.noLocA' whereBindName] $
             Ghc.HsWC [] $
-              Ghc.noLocA' $
-                Ghc.HsSig
-                  { Ghc.sig_ext = Ghc.NoExtField
-                  , Ghc.sig_bndrs = Ghc.HsOuterImplicit []
-                  , Ghc.sig_body = Ghc.noLocA' $
-                      Ghc.HsAppTy Ghc.NoExtField
-                        (Ghc.noLocA' . Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted
-                          $ Ghc.noLocA' Ghc.maybeTyConName)
-                        (Ghc.noLocA' . Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted .
-                           Ghc.noLocA' $ debugContextName debugNames
-                        )
-                  }
+              Ghc.HsSig' $
+                Ghc.noLocA' $
+                  Ghc.HsAppTy Ghc.NoExtField
+                    (Ghc.noLocA' . Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted
+                      $ Ghc.noLocA' Ghc.maybeTyConName)
+                    (Ghc.noLocA' . Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted .
+                       Ghc.noLocA' $ debugContextName debugNames
+                    )
 
       -- add the generated bind to the function's where clause
       whereBinds' =
