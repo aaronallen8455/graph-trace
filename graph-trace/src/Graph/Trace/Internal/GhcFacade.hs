@@ -32,6 +32,7 @@ import GHC.Driver.Plugins as Ghc hiding (TcPlugin)
 import GHC.Driver.Session as Ghc
 import GHC.Hs as Ghc hiding (FunDep)
 import GHC.Iface.Env as Ghc
+import GHC.LanguageExtensions as Ghc hiding (UnicodeSyntax)
 import GHC.Rename.Expr as Ghc
 import GHC.Tc.Types as Ghc
 import GHC.Tc.Types.Constraint as Ghc
@@ -65,8 +66,10 @@ import GHC.Hs.Binds as Ghc
 import GHC.Hs.Decls as Ghc
 import GHC.Hs.Expr as Ghc
 import GHC.Hs.Extension as Ghc
+import GHC.Hs.Pat as Ghc
 import GHC.Hs.Type as Ghc
 import GHC.Iface.Env as Ghc
+import GHC.LanguageExtensions as Ghc hiding (UnicodeSyntax)
 import GHC.Rename.Expr as Ghc
 import GHC.Tc.Types as Ghc
 import GHC.Tc.Types.Constraint as Ghc
@@ -95,7 +98,9 @@ import GHC.Hs.Binds as Ghc
 import GHC.Hs.Decls as Ghc
 import GHC.Hs.Expr as Ghc
 import GHC.Hs.Extension as Ghc
+import GHC.Hs.Pat as Ghc
 import GHC.Hs.Types as Ghc
+import GHC.LanguageExtensions as Ghc hiding (UnicodeSyntax)
 import GHC.ThToHs as Ghc
 import IfaceEnv as Ghc
 import MkCore as Ghc

@@ -35,7 +35,7 @@ mkTraceEvent !msg = do
 
 writeEventToLog :: Event -> IO ()
 -- forcing msg is required here since the file MVar could be entagled with it
-writeEventToLog event =
+writeEventToLog event = seq fileLock $
   withMVar fileLock $ \h ->
     BSL.hPut h . (<> "\n") $ eventToLogStr event
 

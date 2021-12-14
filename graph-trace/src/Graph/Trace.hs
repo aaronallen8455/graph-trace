@@ -1,3 +1,5 @@
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -16,9 +18,10 @@ module Graph.Trace
 import           Control.Monad (when)
 import           Control.Monad.IO.Class (liftIO)
 import           Control.Monad.Trans.Class (lift)
-import           Control.Monad.Trans.State
+import           Control.Monad.Trans.State.Strict
 import           Control.Monad.Trans.Writer.CPS
 import qualified Data.Generics as Syb
+import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import           Data.Maybe
 import qualified Data.Set as S
@@ -56,6 +59,10 @@ warnAboutOptimizations = do
   when (Ghc.enumSetMember Ghc.Opt_CSE generalFlags) .
     liftIO $ putStrLn " * Common sub-expression elimination is enabled: it's recommended to disable this optimization when using graph-trace. Use the -fno-cse GHC option to disable it."
 
+isMonomorphismRestrictionOn :: Ghc.TcM Bool
+isMonomorphismRestrictionOn =
+  Ghc.xopt Ghc.MonomorphismRestriction <$> Ghc.getDynFlags
+
 renamedResultAction
   :: [Ghc.CommandLineOption]
   -> Ghc.TcGblEnv
@@ -91,14 +98,14 @@ renamedResultAction cmdLineOptions tcGblEnv
               `Syb.everywhereM` hsGroup
 
   -- process value bindings
-  valBinds' <- (`evalStateT` S.empty) $
+  (valBinds', patBindNames) <- (`evalStateT` S.empty) . runWriterT $
       Syb.mkM (modifyValBinds debugNames nameMap)
     `Syb.everywhereM`
       valBinds
 
   -- process type class decls and instances
-  -- TODO Only need to traverse with modifyValBinds. Other are not applied deeply
-  tyClGroups' <- (`evalStateT` S.empty) $
+  -- TODO Only need to traverse with modifyValBinds. Others are not applied deeply
+  (tyClGroups', tyClPatBindNames) <- (`evalStateT` S.empty) . runWriterT $
       Syb.mkM (modifyClsInstDecl debugNames nameMap)
     `Syb.extM`
       modifyTyClDecl debugNames nameMap
@@ -107,13 +114,50 @@ renamedResultAction cmdLineOptions tcGblEnv
     `Syb.everywhereM`
       tyClGroups
 
+  mmrOn <- isMonomorphismRestrictionOn
+
+  -- remove predicates from signatures for pattern bound ids if monomorphism
+  -- restriction is on, otherwise compilation will fail.
+  let (valBinds'', tyClGroups'') =
+        if mmrOn
+           then ( removeConstraints debugNames patBindNames valBinds'
+                , removeConstraints debugNames tyClPatBindNames tyClGroups'
+                )
+           else (valBinds', tyClGroups')
+
   pure ( tcGblEnv
-       , hsGroup' { Ghc.hs_valds = valBinds'
-                  , Ghc.hs_tyclds = tyClGroups'
+       , hsGroup' { Ghc.hs_valds = valBinds''
+                  , Ghc.hs_tyclds = tyClGroups''
                   }
        )
 
 renamedResultAction _ tcGblEnv group = pure (tcGblEnv, group)
+
+-- | Removes debug predicates from the type signatures in an expression.
+-- This is necessary if there are type signatures for pattern bound names and
+-- the monomorphism restriction is on.
+removeConstraints :: Syb.Data a => DebugNames -> S.Set Ghc.Name -> a -> a
+removeConstraints debugNames targetNames thing
+  | S.null targetNames = thing
+  | otherwise = Syb.mkT processBind `Syb.everywhere` thing
+  where
+    processBind :: Ghc.HsValBinds Ghc.GhcRn -> Ghc.HsValBinds Ghc.GhcRn
+    processBind (Ghc.XValBindsLR (Ghc.NValBinds binds sigs)) =
+      Ghc.XValBindsLR (Ghc.NValBinds binds (concatMap removeConstraint sigs))
+    processBind binds = binds
+    removeConstraint (Ghc.L loc (Ghc.TypeSig x1 names sig)) =
+      let (targeted, inert) =
+            L.partition ((`S.member` targetNames) . Ghc.unLoc) names
+       in [ Ghc.noLocA' . Ghc.TypeSig x1 targeted
+              $ Syb.mkT removePred `Syb.everywhere` sig
+          , Ghc.L loc $ Ghc.TypeSig x1 inert sig
+          ]
+    removeConstraint s = [s]
+    removePred (Ghc.HsQualTy' x ctx body) =
+      let newCtx = (fmap . fmap) (filter (notDebugPred . Ghc.unLoc)) ctx
+       in Ghc.HsQualTy' x newCtx body
+    removePred x = x
+    notDebugPred = isNothing . checkForDebugPred debugNames
 
 data DebugNames =
   DebugNames
@@ -133,7 +177,10 @@ modifyBinds
   :: M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> DebugNames
   -> Ghc.LHsBinds Ghc.GhcRn
-  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.LHsBinds Ghc.GhcRn)
+  -> WriterT
+       (S.Set Ghc.Name)
+       (StateT (S.Set Ghc.Name) Ghc.TcM)
+       (Ghc.LHsBinds Ghc.GhcRn)
 modifyBinds nameMap debugNames =
   (traverse . traverse)
     (modifyBinding nameMap debugNames)
@@ -145,13 +192,16 @@ modifyValBinds
   :: DebugNames
   -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> Ghc.NHsValBindsLR Ghc.GhcRn
-  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.NHsValBindsLR Ghc.GhcRn)
+  -> WriterT
+       (S.Set Ghc.Name)
+       (StateT (S.Set Ghc.Name) Ghc.TcM)
+       (Ghc.NHsValBindsLR Ghc.GhcRn)
 modifyValBinds debugNames nameMap (Ghc.NValBinds binds sigs) = do
   binds' <-
     (traverse . traverse)
       (modifyBinds nameMap debugNames)
       binds
-  modify' (S.union $ M.keysSet nameMap)
+  lift $ modify' (S.union $ M.keysSet nameMap)
   pure $ Ghc.NValBinds binds' sigs
 
 -- | Instrument default method implementations in a type class declaration if
@@ -160,7 +210,10 @@ modifyTyClDecl
   :: DebugNames
   -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> Ghc.TyClDecl Ghc.GhcRn
-  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.TyClDecl Ghc.GhcRn)
+  -> WriterT
+       (S.Set Ghc.Name)
+       (StateT (S.Set Ghc.Name) Ghc.TcM)
+       (Ghc.TyClDecl Ghc.GhcRn)
 modifyTyClDecl debugNames nameMap
     cd@Ghc.ClassDecl { Ghc.tcdMeths = meths
                      } = do
@@ -174,7 +227,10 @@ modifyClsInstDecl
   :: DebugNames
   -> M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> Ghc.ClsInstDecl Ghc.GhcRn
-  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.ClsInstDecl Ghc.GhcRn)
+  -> WriterT
+       (S.Set Ghc.Name)
+       (StateT (S.Set Ghc.Name) Ghc.TcM)
+       (Ghc.ClsInstDecl Ghc.GhcRn)
 modifyClsInstDecl debugNames nameMap
     inst@Ghc.ClsInstDecl{ Ghc.cid_binds = binds }
       = do
@@ -280,7 +336,10 @@ modifyBinding
   :: M.Map Ghc.Name (Maybe Ghc.FastString, Propagation)
   -> DebugNames
   -> Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn
-  -> StateT (S.Set Ghc.Name) Ghc.TcM (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
+  -> WriterT
+       (S.Set Ghc.Name)
+       (StateT (S.Set Ghc.Name) Ghc.TcM)
+       (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
 modifyBinding nameMap debugNames
   bnd@Ghc.FunBind { Ghc.fun_id = Ghc.L' loc name
                   , Ghc.fun_matches = mg@(Ghc.MG _ alts _) }
@@ -290,16 +349,29 @@ modifyBinding nameMap debugNames
                   Nothing -> Left $ Ghc.getOccString name
                   Just k -> Right $ Ghc.unpackFS k
 
-      whereBindExpr <- lift $ mkNewIpExpr loc key prop
+      whereBindExpr <- lift . lift $ mkNewIpExpr loc key prop
 
-      newAlts <-
+      newAlts <- lift $
         (traverse . traverse . traverse)
           (modifyMatch prop whereBindExpr debugNames)
           alts
 
       pure bnd{Ghc.fun_matches = mg{ Ghc.mg_alts = newAlts }}
--- modifyBinding nameMap entryName
---   bnd@Ghc.PatBind{} = DT.trace "PAT BIND" pure bnd
+modifyBinding nameMap _
+  bnd@Ghc.PatBind{ Ghc.pat_lhs = pat } = do
+    -- Collect the 'Name's appearing in pattern bindings so that if they have
+    -- type signatures, the predicate can be removed if monomorphism
+    -- restriction is on.
+    let collectName :: Ghc.Pat Ghc.GhcRn -> S.Set Ghc.Name
+        collectName = \case
+          Ghc.VarPat _ (Ghc.unLoc -> name)
+            | M.member name nameMap -> S.singleton name
+          Ghc.AsPat _ (Ghc.unLoc -> name) _
+            | M.member name nameMap -> S.singleton name
+          _ -> mempty
+        vars = Syb.everything (<>) (Syb.mkQ mempty collectName) pat
+    tell vars
+    pure bnd
 modifyBinding _ _ bnd = pure bnd
 
 mkWhereBindName :: Ghc.TcM Ghc.Name

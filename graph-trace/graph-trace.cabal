@@ -33,6 +33,7 @@ library
   build-depends: base
                , ghc
                , ghc-prim
+               , ghc-boot
                , containers
                , syb
                , template-haskell

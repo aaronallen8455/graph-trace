@@ -15,6 +15,7 @@ import           Control.Monad
 import           Control.Concurrent
 import           Data.Functor.Identity (Identity(..))
 import Graph.Trace
+--import           Debug.Trace
 import Class
 
 import qualified System.Random as Rand
@@ -23,7 +24,7 @@ import           System.IO.Unsafe
 main :: DebugDeep => IO ()
 main = trace bah print unassuming >> buzzard
   where
-    --unassuming :: Either Bool Int
+    unassuming :: Either Bool Int
     --thisIsABoolean :: Bool
     unassuming@(Left thisIsABoolean@True) =
       trace bah $! (Left True :: Either Bool Int)
@@ -34,9 +35,8 @@ main = trace bah print unassuming >> buzzard
 
     bah :: String
     bah = unsafePerformIO $ do
-      let thing = ?_debug_ip
-      l <- getLine
-      pure $ l <> show (propagation <$> thing)
+      getLine
+
 
 --         where
 --           inFlight = putStrLn "need help now"
