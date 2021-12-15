@@ -26,6 +26,7 @@ module Graph.Trace.Internal.Types
   , SrcLine
   , SrcCol
   , callStackToCallSite
+  , DebugNames(..)
   ) where
 
 import qualified Data.ByteString.Lazy as BSL
@@ -33,6 +34,8 @@ import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           GHC.Stack
 import           GHC.TypeLits
 import qualified Language.Haskell.TH.Syntax as TH
+
+import qualified Graph.Trace.Internal.GhcFacade as Ghc
 
 data Propagation
   = Mute -- ^ Does not output traces, overrides other options
@@ -138,3 +141,15 @@ keyStr
       BSL8.pack
       BSL8.pack
   . debugKey
+
+data DebugNames =
+  DebugNames
+    { debugMutePredName :: Ghc.Name
+    , debugDeepPredName :: Ghc.Name
+    , debugDeepKeyPredName :: Ghc.Name
+    , debugPredName :: Ghc.Name
+    , debugKeyPredName :: Ghc.Name
+    , debugInertPredName :: Ghc.Name
+    , entryName :: Ghc.Name
+    , debugContextName :: Ghc.Name
+    }

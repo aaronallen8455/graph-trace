@@ -30,6 +30,9 @@ library
     Graph.Trace.Internal.GhcFacade
     Graph.Trace.Internal.Types
     Graph.Trace.Internal.Trace
+    Graph.Trace.Internal.Solver
+    Graph.Trace.Internal.Instrument
+    Graph.Trace.Internal.Predicates
   build-depends: base
                , ghc
                , ghc-prim
