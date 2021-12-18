@@ -61,12 +61,12 @@ renamedResultAction cmdLineOptions tcGblEnv
   debugTypesModule <- findImportedModule "Graph.Trace.Internal.Types"
   debugTraceModule <- findImportedModule "Graph.Trace.Internal.Trace"
 
-  debugMutePredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugMute")
-  debugDeepPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugDeep")
-  debugDeepKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugDeepKey")
-  debugPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "Debug")
-  debugKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugKey")
-  debugInertPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "DebugInert")
+  traceMutePredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "TraceMute")
+  traceDeepPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "TraceDeep")
+  traceDeepKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "TraceDeepKey")
+  tracePredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "Trace")
+  traceKeyPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "TraceKey")
+  traceInertPredName <- Ghc.lookupOrig debugTypesModule (Ghc.mkClsOcc "TraceInert")
   entryName <- Ghc.lookupOrig debugTraceModule (Ghc.mkVarOcc "entry")
   debugContextName <- Ghc.lookupOrig debugTypesModule (Ghc.mkTcOcc "DebugContext")
 

@@ -74,8 +74,8 @@ addConstraintToSigType debugNames debugAllFlag names sig@(Ghc.HsSig' t) = do
       prop = if debugAllFlag then Shallow else Inert
       predName =
         if debugAllFlag
-           then debugPredName debugNames
-           else debugInertPredName debugNames
+           then tracePredName debugNames
+           else traceInertPredName debugNames
       predTy = Ghc.noLocA'
              $ Ghc.HsTyVar Ghc.emptyEpAnn Ghc.NotPromoted
                  (Ghc.noLocA' predName)
@@ -119,14 +119,14 @@ checkForDebugPred
   -> Maybe (Maybe Ghc.FastString, Propagation)
 checkForDebugPred debugNames
     (Ghc.HsTyVar _ _ (Ghc.L _ name))
-  | name == debugPredName debugNames = Just (Nothing, Shallow)
-  | name == debugDeepPredName debugNames = Just (Nothing, Deep)
-  | name == debugMutePredName debugNames = Just (Nothing, Mute)
-  | name == debugInertPredName debugNames = Just (Nothing, Inert)
+  | name == tracePredName debugNames = Just (Nothing, Shallow)
+  | name == traceDeepPredName debugNames = Just (Nothing, Deep)
+  | name == traceMutePredName debugNames = Just (Nothing, Mute)
+  | name == traceInertPredName debugNames = Just (Nothing, Inert)
 checkForDebugPred debugNames
     (Ghc.HsAppTy _ (Ghc.L _ (Ghc.HsTyVar _ _ (Ghc.L _ name))) (Ghc.L _ (Ghc.HsTyLit _ (Ghc.HsStrTy _ key))))
-  | name == debugKeyPredName debugNames = Just (Just key, Shallow)
-  | name == debugDeepKeyPredName debugNames = Just (Just key, Deep)
+  | name == traceKeyPredName debugNames = Just (Just key, Shallow)
+  | name == traceDeepKeyPredName debugNames = Just (Just key, Deep)
 checkForDebugPred debugNames Ghc.HsForAllTy { Ghc.hst_body = Ghc.L _ ty }
   = checkForDebugPred debugNames ty
 checkForDebugPred debugNames (Ghc.HsParTy _ (Ghc.L _ ty))

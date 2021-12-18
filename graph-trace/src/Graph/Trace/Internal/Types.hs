@@ -12,12 +12,12 @@ module Graph.Trace.Internal.Types
   , DefinitionSite
   , CallSite
   , DebugIP
-  , DebugMute
-  , DebugDeep
-  , DebugDeepKey
-  , Debug
-  , DebugKey
-  , DebugInert
+  , TraceMute
+  , TraceDeep
+  , TraceDeepKey
+  , Trace
+  , TraceKey
+  , TraceInert
   , Event(..)
   , eventToLogStr
   , FunName
@@ -66,12 +66,12 @@ type DefinitionSite = SrcCodeLoc
 type CallSite = SrcCodeLoc
 
 type DebugIP = (?_debug_ip :: Maybe DebugContext, HasCallStack)
-type DebugMute = DebugIP
-type DebugDeep = DebugIP
-type DebugDeepKey (key :: Symbol) = DebugIP
-type Debug = DebugIP
-type DebugKey (key :: Symbol) = DebugIP
-type DebugInert = DebugIP
+type TraceMute = DebugIP
+type TraceDeep = DebugIP
+type TraceDeepKey (key :: Symbol) = DebugIP
+type Trace = DebugIP
+type TraceKey (key :: Symbol) = DebugIP
+type TraceInert = DebugIP
 -- These are String because they need to be lifted into TH expressions
 type FunName = String
 type UserKey = String
@@ -144,12 +144,12 @@ keyStr
 
 data DebugNames =
   DebugNames
-    { debugMutePredName :: Ghc.Name
-    , debugDeepPredName :: Ghc.Name
-    , debugDeepKeyPredName :: Ghc.Name
-    , debugPredName :: Ghc.Name
-    , debugKeyPredName :: Ghc.Name
-    , debugInertPredName :: Ghc.Name
+    { traceMutePredName :: Ghc.Name
+    , traceDeepPredName :: Ghc.Name
+    , traceDeepKeyPredName :: Ghc.Name
+    , tracePredName :: Ghc.Name
+    , traceKeyPredName :: Ghc.Name
+    , traceInertPredName :: Ghc.Name
     , entryName :: Ghc.Name
     , debugContextName :: Ghc.Name
     }

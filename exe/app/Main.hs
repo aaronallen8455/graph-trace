@@ -21,7 +21,7 @@ import Class
 import qualified System.Random as Rand
 import           System.IO.Unsafe
 
-main :: DebugDeep => IO ()
+main :: TraceDeep => IO ()
 main = trace bah print unassuming >> buzzard
   where
     unassuming :: Either Bool Int
