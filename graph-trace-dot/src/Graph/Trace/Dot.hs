@@ -61,9 +61,9 @@ htmlEscape bs = foldl' doReplacement bs replacements
           | otherwise -> before <> re <> BS8.tail after
 
     replacements =
-      [ ('<', "&lt;")
+      [ ('&', "&amp;")
+      , ('<', "&lt;")
       , ('>', "&gt;")
-      , ('&', "&amp;")
       , ('\\', "\\\\") -- not really an HTML escape, but still needed
       ]
 

@@ -5,7 +5,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE ImplicitParams #-} -- used in TH splice
 module Graph.Trace.Internal.Instrument
   ( modifyValBinds
   , modifyTyClDecl
@@ -19,6 +19,7 @@ import           Control.Monad.Trans.Writer.CPS
 import qualified Data.Generics as Syb
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import           GHC.Magic (noinline)
 import qualified Language.Haskell.TH as TH
 import           System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Rand
@@ -339,7 +340,7 @@ mkNewIpExpr srcSpan newKey newProp = do
   Right exprPs
     <- fmap (Ghc.convertToHsExpr Ghc.Generated Ghc.noSrcSpan)
      . liftIO
-     $ TH.runQ [| Just $ mkNewDebugContext mDefSite newKey newProp ?_debug_ip |]
+     $ TH.runQ [| noinline $! Just $! mkNewDebugContext mDefSite newKey newProp ?_debug_ip |]
 
   (exprRn, _) <- Ghc.rnLExpr exprPs
 
