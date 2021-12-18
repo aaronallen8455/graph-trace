@@ -36,7 +36,7 @@ data Key = Key { keyId :: !Word
 data LogEntry
   = Entry
       Key
-      (Maybe Key)
+      (Maybe Key) -- called by
       (Maybe SrcCodeLoc) -- definition site
       (Maybe SrcCodeLoc) -- call site
   | Trace Key BS.ByteString (Maybe SrcCodeLoc)
@@ -94,7 +94,8 @@ parseTraceEvent = do
   message <- Atto.takeTill (== '§') <* Atto.char '§'
   callSite <- parseSrcCodeLoc
   _ <- Atto.many' Atto.space
-  pure $ Trace key (htmlEscape message) callSite
+  let removeNewlines = BS8.unwords . BS8.lines
+  pure $ Trace key (htmlEscape . removeNewlines $ message) callSite
 
 parseSrcCodeLoc :: Atto.Parser (Maybe SrcCodeLoc)
 parseSrcCodeLoc = do

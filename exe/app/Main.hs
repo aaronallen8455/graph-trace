@@ -30,13 +30,15 @@ main = trace bah print unassuming >> buzzard
       trace bah $! (Left True :: Either Bool Int)
 
     buzzard = do
-      putStrLn "please, help"
+      putStrLn $ "please, help" <&> "boo"
       traceM bah
 
     bah :: String
     bah = unsafePerformIO $ do
       getLine
 
+(<&>) :: String -> String -> String
+a <&> b = a
 
 --         where
 --           inFlight = putStrLn "need help now"
