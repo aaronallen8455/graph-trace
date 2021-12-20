@@ -3,16 +3,16 @@ name:               exe
 version:            0.1.0.0
 
 -- A short (one-line) description of the package.
--- synopsis:
+synopsis: Test executable
 
 -- A longer description of the package.
--- description:
+description: Test executable for @graph-viz@
 
 -- A URL where users can report bugs.
 -- bug-reports:
 
 -- The license under which the package is released.
--- license:
+license: MIT
 
 -- The package author(s).
 -- author:
@@ -20,15 +20,16 @@ maintainer:         aaron@flipstone.com
 
 -- A copyright notice.
 -- copyright:
--- category:
+category: testing
 extra-source-files: CHANGELOG.md
+tested-with: GHC==9.2.1, GHC==9.0.1, GHC==8.10.7
 
 executable test-exe
   main-is:             Main.hs
   hs-source-dirs: app
   other-modules: Class
   -- other-extensions:
-  build-depends:       base
+  build-depends:       base >= 4.9 && < 5
                      , graph-trace
                      , random
   -- hs-source-dirs:
