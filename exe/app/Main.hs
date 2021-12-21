@@ -3,6 +3,8 @@
 -- {-# OPTIONS_GHC -fno-full-laziness -fno-cse #-}
 --{-# OPTIONS_GHC -ddump-rn-ast #-}
 
+{-# LANGUAGE ImpredicativeTypes #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -17,123 +19,152 @@ import           Data.Functor.Identity (Identity(..))
 import Graph.Trace
 --import           Debug.Trace
 import Class
+import           Data.Char
 
 import qualified System.Random as Rand
 import           System.IO.Unsafe
 
 main :: TraceDeep => IO ()
-main = trace bah print unassuming >> buzzard
-  where
-    unassuming :: Either Bool Int
-    --thisIsABoolean :: Bool
-    unassuming@(Left thisIsABoolean@True) =
-      trace bah $! (Left True :: Either Bool Int)
+main = do
+  firstName <- prompt "Enter your first name"
+  lastName <- prompt "Enter your last name"
+  greet firstName lastName
 
-    buzzard = do
-      putStrLn $ "please, help" <&> "boo"
-      traceM bah
+prompt :: String -> IO String
+prompt str = do
+  putStrLn str
+  input <- getLine
+  traceM $ "input: " <> input
+  pure $ capitalize input
 
-    bah :: String
-    bah = unsafePerformIO $ do
-      getLine
+capitalize :: String -> String
+capitalize [] = []
+capitalize (x:xs) = toUpper x : map toLower xs
 
-(<&>) :: String -> String -> String
-a <&> b = a
+greet :: String -> String -> IO ()
+greet first last =
+  putStrLn $ "Hello, " <> first <> " " <> last <> "!"
 
---         where
---           inFlight = putStrLn "need help now"
-         -- shitty = ()
-  --replicateM_ 2 $ forkIO test
---   andAnother
---   test'
+{-# NOINLINE main #-}
+-- main :: TraceDeep => IO ()
+-- main = trace bah print unassuming >> buzzard
+--   where
+--     unassuming :: Either Bool Int
+--     --thisIsABoolean :: Bool
+--     unassuming@(Left thisIsABoolean@True) =
+--       trace bah $! (Left True :: Either Bool Int)
+-- 
+--     buzzard = do
+--       putStrLn $ "hello" <&> "boo"
+--       traceM bah
+-- 
+--     bah :: String
+--     bah = unsafePerformIO $ do
+--       getLine
+-- (<&>) :: String -> String -> String
+-- a <&> b = a
 
--- test' :: IO ()
--- test' = do
---   andAnother
---   trace "test\ntest" pure ()
---   traceM "yo"
---   putStrLn $ deff (I 3)
---   x <- readLn
---   case x of
---     3 -> putStrLn $ classy (I x)
---     _ -> pure ()
---   putStrLn $ classier (I 5)
---   inWhere
---   let inLet :: IO ()
---       inLet = do
---         letWhere
---         another
---           where letWhere = trace ("hello" \/& "two") pure ()
---   inLet
---   !_ <- another
---   let letBound = letBoundThing
---   trace letBound pure ()
---   trace "leaving" pure ()
---     where
---       inWhere :: Debug => IO ()
---       inWhere = do
---         innerWhere
---           where
---             innerWhere :: Debug => IO ()
---             innerWhere = trace "innerWhere" pure ()
--- 
--- another :: Debug => IO ()
--- another
---   | trace "another" True = do
---     pure ()
---   | otherwise = pure ()
--- 
--- andAnother :: Debug => IO ()
--- andAnother = trace "hello!" pure ()
--- 
--- letBoundThing :: Debug => String
--- letBoundThing = "bound by let"
--- 
--- (\/&) :: String -> String -> String
--- a \/& b = the a <> ('\\' : b)
--- 
--- the :: a -> a
--- the = id
--- 
--- newtype I = I Int deriving Show
--- 
--- instance Classy I where
---   classy :: Debug => I -> String
---   classy = boo
---     where
---       boo :: Debug => I -> String
---       boo i = trace (show i) "..."
--- 
--- instance Classier I where
---   classier = show
+-- main :: Trace => IO ()
+-- main = test'
+
+test' :: Trace => IO ()
+test' = do
+  andAnother
+  trace "test\ntest" pure ()
+  traceM "yo"
+  putStrLn $ deff (I 3)
+  x <- readLn
+  case x of
+    3 -> putStrLn $ classy (I x)
+    _ -> pure ()
+  putStrLn $ classier (I 5)
+  inWhere
+  let inLet :: Trace => IO ()
+      inLet = do
+        letWhere
+        another
+          where letWhere = trace ("hello" \/& "two") pure ()
+  inLet
+  !_ <- another
+  let letBound = letBoundThing
+  trace letBound pure ()
+  trace "leaving" pure ()
+    where
+      inWhere :: Trace => IO ()
+      inWhere = do
+        innerWhere
+          where
+            innerWhere :: Trace => IO ()
+            innerWhere = trace "innerWhere" pure ()
+
+another :: Trace => IO ()
+another
+  | trace "another" True = do
+    pure ()
+  | otherwise = pure ()
+
+andAnother :: (Trace, Monad m) => m ()
+andAnother = trace "hello!" pure ()
+
+letBoundThing :: Trace => String
+letBoundThing = "bound by let"
+
+(\/&) :: String -> String -> String
+a \/& b = the a <> ('\\' : b)
+
+the :: a -> a
+the = id
+
+newtype I = I Int deriving Show
+
+instance Classy I where
+  classy :: Trace => I -> String
+  classy = boo
+    where
+      boo :: Trace => I -> String
+      boo i = trace (show i) "..."
+
+instance Classier I where
+  classier = show
 -- 
 -- -- test :: (?x :: String) => IO ()
 -- -- test = print ?x
 -- 
--- data FieldUpdate a
---   = FieldValue a
---   | FieldOmitted
---   | FieldNull
--- 
--- mkUpdater :: f FieldUpdate
---           -> f Maybe
---           -> (forall a. f a -> a x)
---           -> Maybe x
--- mkUpdater update original getField =
---   case getField update of
---     FieldValue a -> Just a
---     FieldOmitted -> getField original
---     FieldNull -> Nothing
--- 
--- data T f =
---   MkT
---     { t1 :: f Bool
---     , t2 :: f String
---     }
--- 
+data FieldUpdate a
+  = FieldValue a
+  | FieldOmitted
+  | FieldNull
+
+mkUpdater :: f FieldUpdate
+          -> f Maybe
+          -> (forall a. f a -> a x)
+          -> Maybe x
+mkUpdater update original getField =
+  case getField update of
+    FieldValue a -> Just a
+    FieldOmitted -> getField original
+    FieldNull -> Nothing
+
+data T f =
+  MkT
+    { t1 :: f Bool
+    , t2 :: f String
+    }
+
+type TY = forall x. (forall a. T a -> a x) -> Maybe x
+
+-- zz :: Int
+-- zz =
+--   let x :: [forall x. x -> x]
+--       x = [id, id]
+--    in id head x 4
+
+zzz :: Int
+zzz = id head [1,2,3]
+
 -- zzzz :: T FieldUpdate -> T Maybe -> T Maybe
 -- zzzz update orig =
---   let updater :: DebugMute => (forall a. T a -> a x) -> Maybe x
+--   let updater :: TY --(forall a. T a -> a x) -> Maybe x
 --       updater | let ?x = 1
 --         = mkUpdater update orig
 --    in MkT
@@ -141,34 +172,15 @@ a <&> b = a
 --         , t2 = updater t2
 --         }
 
--- fzzz :: (?_debug_ip :: Maybe DebugIPTy) => T FieldUpdate -> T Maybe -> T Maybe
+-- fzzz :: Trace => T FieldUpdate -> T Maybe -> T Maybe
 -- fzzz update orig = entry $
---   let --updater :: (?_debug_ip :: Maybe DebugIPTy)
---       --        => (forall a. T a -> a x) -> Maybe x
+--   let updater :: -- (?_debug_ip :: Maybe DebugContext)
+--               (forall a. T a -> a x) -> Maybe x
 --       updater -- | let ?_debug_ip = newIP'
 --               = --entry $
 --                 mkUpdater update orig
---         where
---           newIP' =
---             let mPrevTag = fmap snd ?_debug_ip
---              in unsafePerformIO $ do
---                     newId <- Rand.randomIO :: IO Word
---                     let newTag = DT
---                           { invocationId = newId
---                           , debugKey = Right "test"
---                           }
---                     pure $ Just (mPrevTag, newTag)
+--       addOne = (+1)
 --    in MkT
 --      { t1 = updater t1
 --      , t2 = updater t2
 --      }
---   where
---     newIP =
---       let mPrevTag = fmap snd ?_debug_ip
---        in unsafePerformIO $ do
---               newId <- Rand.randomIO :: IO Word
---               let newTag = DT
---                     { invocationId = newId
---                     , debugKey = Right "test"
---                     }
---               pure $ Just (mPrevTag, newTag)

@@ -1,9 +1,10 @@
+{-# OPTIONS_GHC -fplugin=Graph.Trace #-}
 module Class where
 
 import           Graph.Trace
 
 class Show a => Classy a where
-  classy :: Trace => a -> String
+  classy :: a -> String
 
   deff :: Trace => a -> String
   deff = show

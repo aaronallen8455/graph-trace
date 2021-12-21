@@ -1,0 +1,106 @@
+<svg width="198pt" height="187pt"
+ viewBox="0.00 0.00 197.50 187.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 183)">
+<polygon fill="white" stroke="transparent" points="-4,4 -4,-183 193.5,-183 193.5,4 -4,4"/>
+<!-- main138835950170271710 -->
+<g id="node1" class="node">
+<title>main138835950170271710</title>
+<g id="a_node1"><a xlink:title=" ">
+<g id="a_node1_0"><a xlink:title="defined at app/Main.hs:28:1">
+<polygon fill="none" stroke="black" points="75,-150 75,-175 116,-175 116,-150 75,-150"/>
+<text text-anchor="start" x="80" y="-159.8" font-family="Times,serif" font-weight="bold" font-size="14.00">main</text>
+</a>
+</g>
+<g id="a_node1_1"><a xlink:href="#prompt924477568213965436" xlink:title="called at app/Main.hs:29:16">
+<polygon fill="#a6d854" stroke="transparent" points="75,-137 75,-150 116,-150 116,-137 75,-137"/>
+<polygon fill="none" stroke="black" points="75,-137 75,-150 116,-150 116,-137 75,-137"/>
+<text text-anchor="start" x="77" y="-141.6" font-family="Times,serif" font-size="8.00">prompt</text>
+</a>
+</g>
+<g id="a_node1_2"><a xlink:href="#prompt8331185687311588863" xlink:title="called at app/Main.hs:30:15">
+<polygon fill="#e78ac3" stroke="transparent" points="75,-124 75,-137 116,-137 116,-124 75,-124"/>
+<polygon fill="none" stroke="black" points="75,-124 75,-137 116,-137 116,-124 75,-124"/>
+<text text-anchor="start" x="77" y="-128.6" font-family="Times,serif" font-size="8.00">prompt</text>
+</a>
+</g>
+<g id="a_node1_3"><a xlink:title="called at app/Main.hs:31:3">
+<polygon fill="#8da0cb" stroke="transparent" points="75,-111 75,-124 116,-124 116,-111 75,-111"/>
+<polygon fill="none" stroke="black" points="75,-111 75,-124 116,-124 116,-111 75,-111"/>
+<text text-anchor="start" x="77" y="-115.6" font-family="Times,serif" font-size="8.00">greet</text>
+</a>
+</g>
+</a>
+</g>
+</g>
+<!-- prompt924477568213965436 -->
+<g id="node2" class="node">
+<title>prompt924477568213965436</title>
+<g id="a_node2"><a xlink:title=" ">
+<g id="a_node2_4"><a xlink:href="#main138835950170271710" xlink:title="defined at app/Main.hs:34:1">
+<polygon fill="#a6d854" stroke="transparent" points="8,-41.5 8,-66.5 80,-66.5 80,-41.5 8,-41.5"/>
+<polygon fill="none" stroke="black" points="8,-41.5 8,-66.5 80,-66.5 80,-41.5 8,-41.5"/>
+<text text-anchor="start" x="16" y="-51.3" font-family="Times,serif" font-size="7.00">←</text>
+<text text-anchor="start" x="23" y="-51.3" font-family="Times,serif" font-size="14.00"> </text>
+<text text-anchor="start" x="27" y="-51.3" font-family="Times,serif" font-weight="bold" font-size="14.00">prompt</text>
+</a>
+</g>
+<g id="a_node2_5"><a xlink:title="printed at app/Main.hs:37:3">
+<polygon fill="none" stroke="black" points="8,-16.5 8,-41.5 80,-41.5 80,-16.5 8,-16.5"/>
+<text text-anchor="start" x="13" y="-25.3" font-family="Times,serif" font-size="14.00">input: john</text>
+</a>
+</g>
+<g id="a_node2_6"><a xlink:title="called at app/Main.hs:38:10">
+<polygon fill="#fc8d62" stroke="transparent" points="8,-3.5 8,-16.5 80,-16.5 80,-3.5 8,-3.5"/>
+<polygon fill="none" stroke="black" points="8,-3.5 8,-16.5 80,-16.5 80,-3.5 8,-3.5"/>
+<text text-anchor="start" x="10" y="-8.1" font-family="Times,serif" font-size="8.00">capitalize</text>
+</a>
+</g>
+</a>
+</g>
+</g>
+<!-- main138835950170271710&#45;&gt;prompt924477568213965436 -->
+<g id="edge1" class="edge">
+<title>main138835950170271710:3&#45;&gt;prompt924477568213965436</title>
+<g id="a_edge1"><a xlink:title=" ">
+<path fill="none" stroke="#a6d854" d="M74,-144C46.44,-144 40.24,-110.82 40.18,-81.32"/>
+<polygon fill="#a6d854" stroke="#a6d854" points="43.68,-81.17 40.39,-71.11 36.69,-81.03 43.68,-81.17"/>
+</a>
+</g>
+</g>
+<!-- prompt8331185687311588863 -->
+<g id="node3" class="node">
+<title>prompt8331185687311588863</title>
+<g id="a_node3"><a xlink:title=" ">
+<g id="a_node3_7"><a xlink:href="#main138835950170271710" xlink:title="defined at app/Main.hs:34:1">
+<polygon fill="#e78ac3" stroke="transparent" points="115,-41.5 115,-66.5 182,-66.5 182,-41.5 115,-41.5"/>
+<polygon fill="none" stroke="black" points="115,-41.5 115,-66.5 182,-66.5 182,-41.5 115,-41.5"/>
+<text text-anchor="start" x="120.5" y="-51.3" font-family="Times,serif" font-size="7.00">←</text>
+<text text-anchor="start" x="127.5" y="-51.3" font-family="Times,serif" font-size="14.00"> </text>
+<text text-anchor="start" x="131.5" y="-51.3" font-family="Times,serif" font-weight="bold" font-size="14.00">prompt</text>
+</a>
+</g>
+<g id="a_node3_8"><a xlink:title="printed at app/Main.hs:37:3">
+<polygon fill="none" stroke="black" points="115,-16.5 115,-41.5 182,-41.5 182,-16.5 115,-16.5"/>
+<text text-anchor="start" x="120" y="-25.3" font-family="Times,serif" font-size="14.00">input: doe</text>
+</a>
+</g>
+<g id="a_node3_9"><a xlink:title="called at app/Main.hs:38:10">
+<polygon fill="#66c2a5" stroke="transparent" points="115,-3.5 115,-16.5 182,-16.5 182,-3.5 115,-3.5"/>
+<polygon fill="none" stroke="black" points="115,-3.5 115,-16.5 182,-16.5 182,-3.5 115,-3.5"/>
+<text text-anchor="start" x="117" y="-8.1" font-family="Times,serif" font-size="8.00">capitalize</text>
+</a>
+</g>
+</a>
+</g>
+</g>
+<!-- main138835950170271710&#45;&gt;prompt8331185687311588863 -->
+<g id="edge2" class="edge">
+<title>main138835950170271710:2&#45;&gt;prompt8331185687311588863</title>
+<g id="a_edge2"><a xlink:title=" ">
+<path fill="none" stroke="#e78ac3" d="M117,-130C139.52,-130 147.07,-105.26 149.1,-81.23"/>
+<polygon fill="#e78ac3" stroke="#e78ac3" points="152.61,-81.23 149.66,-71.05 145.62,-80.84 152.61,-81.23"/>
+</a>
+</g>
+</g>
+</g>
+</svg>
