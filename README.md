@@ -19,7 +19,7 @@ __Contents:__
 
 Consider this simplistic program that greets the user by name:
 ```haskell
-import Graph.Trace (TraceDeep, traceM)
+import Graph.Trace (TraceDeep, trace, traceM)
 import Data.Char (toUpper, toLower)
 
 main :: TraceDeep => IO ()
@@ -37,7 +37,9 @@ prompt str = do
 
 capitalize :: String -> String
 capitalize [] = []
-capitalize (x:xs) = toUpper x : map toLower xs
+capitalize (x:xs) =
+  let result = toUpper x : map toLower xs
+   in trace ("result: " <> result) result
 
 greet :: String -> String -> IO ()
 greet firstName lastName =
@@ -81,7 +83,7 @@ run this program to generate the following trace of the call graph:
    ```
 3. Build your project (`cabal build all` or `stack build`).
 4. Running your program should now generate a file called `<executable-name>.trace`.
-5. Install [Graphviz](https://graphviz.org) and the `graph-trace-viz` program.
+5. Install [Graphviz](https://graphviz.org) and the `graph-trace-viz` utility.
    Invoke `graph-trace-viz` within the same directory as the trace file.
 6. There should now be a file such as `<executable-name>.html` which can be
    viewed in your browser.
@@ -180,4 +182,9 @@ There are several known caveats you should be aware of:
   If you have a function binding that takes a rank-n quantified type as a
   parameter, this can cause compilation with the plugin to fail. With GHC 9.2
   and above, giving a type signature to the binding will resolve the issue.
-- The plugin does not support GHC versions less than 8.10
+- __View patterns__  
+  Traces for function calls in view patterns get associated to the node one
+  level up from the function using the view pattern.
+- __Pattern synonyms__  
+  Function calls in pattern synonym matches do not get traced.
+- The plugin does not support GHC versions less than 8.10.x

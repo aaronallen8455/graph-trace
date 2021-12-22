@@ -198,10 +198,14 @@ modifyMatch prop whereBindExpr debugNames match = do
   -- predicates, those that do will be addressed via recursion.
   -- It is also necesarry to descend into potential recursive wheres
   -- but the recursion needs to stop if a known name is found.
-  let stopCondition :: Ghc.HsBind Ghc.GhcRn -> Bool
-      stopCondition Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
+  let visitedBinding :: Ghc.HsBind Ghc.GhcRn -> Bool
+      visitedBinding Ghc.FunBind{ Ghc.fun_id = Ghc.L _ funName }
         = S.member funName visitedNames
-      stopCondition _ = False
+      visitedBinding _ = False
+      -- Do not instrument let bindings in view patterns.
+      isViewPat :: Ghc.Pat Ghc.GhcRn -> Bool
+      isViewPat Ghc.ViewPat{} = True
+      isViewPat _ = False
 
       -- recurse the entire match to add let bindings to all where clauses,
       -- including those belonging to let-bound terms at any nesting depth.
@@ -218,7 +222,7 @@ modifyMatch prop whereBindExpr debugNames match = do
               , Ghc.grhssGRHSs = grhsList
               }
         } = Syb.everywhereBut
-              (Syb.mkQ False stopCondition)
+              (Syb.mkQ False visitedBinding `Syb.extQ` isViewPat) -- stop condition
               (Syb.mkT $ updateDebugIpInFunBind whereBindName)
               match
 
