@@ -53,7 +53,7 @@ run this program to generate the following trace of the call graph:
 
 1. Add the `graph-trace` package as a dependency to your project.
 2. Enable the plugin by adding the following GHC options:
-   `-fplugin=Graph.Trace -fplugin-opt Graph.Trace:debug-all -fno-full-laziness -fno-cse`.
+   `-fplugin=Graph.Trace -fplugin-opt Graph.Trace:trace-all -fno-full-laziness -fno-cse`.
    This can be placed in the `ghc-options` field of the cabal or
    package.yaml file (depending on whether you use cabal or stack to build).
    For example:
@@ -65,7 +65,7 @@ run this program to generate the following trace of the call graph:
        ...
        ghc-options:
          -fplugin=Graph.Trace
-         -fplugin-opt Graph.Trace:debug-all
+         -fplugin-opt Graph.Trace:trace-all
          -fno-full-laziness
          -fno-cse
    ```
@@ -75,7 +75,7 @@ run this program to generate the following trace of the call graph:
      ...
      ghc-options:
        -fplugin=Graph.Trace
-       -fplugin-opt Graph.Trace:debug-all
+       -fplugin-opt Graph.Trace:trace-all
        -fno-full-laziness
        -fno-cse
    ```
@@ -142,8 +142,8 @@ tracing, all of which are exported by `Graph.Trace`:
   the same thing but for `TraceDeep`.
 
 If you want every function in your program to emit traces, you can use the
-`debug-all` plugin option which effectively adds the `Trace` constraint to all
-function definitons. To use this option, pass the `-fplugin-opt Graph.Trace:debug-all`
+`trace-all` plugin option which effectively adds the `Trace` constraint to all
+function definitons. To use this option, pass the `-fplugin-opt Graph.Trace:trace-all`
 option to GHC in addition to `-fplugin=Graph.Trace`.
 
 If a trace file already exists for your executable being then new entries will

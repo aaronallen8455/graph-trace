@@ -72,14 +72,14 @@ renamedResultAction cmdLineOptions tcGblEnv
 
   let debugNames = DebugNames{..}
 
-  -- If the "debug-all" option is passed, add the Debug predicate to all
+  -- If the "trace-all" option is passed, add the Debug predicate to all
   -- function signatures.
-  let debugAllFlag = "debug-all" `elem` cmdLineOptions
+  let traceAllFlag = "trace-all" `elem` cmdLineOptions
       (hsGroup'@Ghc.HsGroup
         { Ghc.hs_valds = valBinds --Ghc.XValBindsLR (Ghc.NValBinds binds sigs)
         , Ghc.hs_tyclds = tyClGroups
         }, nameMap) = runWriter
-          $ Syb.mkM (addConstraintToSig debugNames debugAllFlag)
+          $ Syb.mkM (addConstraintToSig debugNames traceAllFlag)
               `Syb.everywhereM` hsGroup
 
   -- process value bindings

@@ -1,4 +1,4 @@
---{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:debug-all #-}
+--{-# OPTIONS_GHC -fplugin=Debug -fplugin-opt Debug:trace-all #-}
 {-# OPTIONS_GHC -fplugin=Graph.Trace #-}
 -- {-# OPTIONS_GHC -fno-full-laziness -fno-cse #-}
 --{-# OPTIONS_GHC -ddump-rn-ast #-}

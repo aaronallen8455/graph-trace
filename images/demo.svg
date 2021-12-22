@@ -46,7 +46,7 @@
 </g>
 <g id="a_node2_5"><a xlink:title="printed at app/Main.hs:37:3">
 <polygon fill="none" stroke="black" points="8,-16.5 8,-41.5 80,-41.5 80,-16.5 8,-16.5"/>
-<text text-anchor="start" x="13" y="-25.3" font-family="Times,serif" font-size="14.00">input: john</text>
+<text text-anchor="start" x="13" y="-25.3" font-family="Times,serif" font-size="14.00">input: haskell</text>
 </a>
 </g>
 <g id="a_node2_6"><a xlink:title="called at app/Main.hs:38:10">
@@ -81,7 +81,7 @@
 </g>
 <g id="a_node3_8"><a xlink:title="printed at app/Main.hs:37:3">
 <polygon fill="none" stroke="black" points="115,-16.5 115,-41.5 182,-41.5 182,-16.5 115,-16.5"/>
-<text text-anchor="start" x="120" y="-25.3" font-family="Times,serif" font-size="14.00">input: doe</text>
+<text text-anchor="start" x="120" y="-25.3" font-family="Times,serif" font-size="14.00">input: curry</text>
 </a>
 </g>
 <g id="a_node3_9"><a xlink:title="called at app/Main.hs:38:10">
