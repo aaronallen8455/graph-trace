@@ -1,11 +1,12 @@
 # Graph Trace
 
-A GHC plugin that causes your Haskell program to create a log file which can be
-compiled to a graph for display with `Graphviz` or some other means. Contrary
-to traditional debug tracing where all output is interleaved into a flat
-sequence of lines, the graph structure produced by this plugin takes into
-account the actual call graph of the program with individual function calls
-represented as edges in the graph.
+This is a GHC plugin that instruments your Haskell program so that it creates a
+log file when run which can then be compiled to a graph using the accompanying
+`graph-trace-viz` utility. In contrast to the usual debug tracing a la
+`Debug.Trace` where all output is interleaved into a flat sequence of lines,
+the graph structure produced by this plugin takes into account the actual call
+graph of the program with individual function calls represented as edges in the
+graph.
 
 __Contents:__
 - [Demonstration](#demonstration)
@@ -83,9 +84,10 @@ run this program to generate the following trace of the call graph:
    ```
 3. Build your project (`cabal build all` or `stack build`).
 4. Running your program should now generate a file called `<executable-name>.trace`.
-5. Install [Graphviz](https://graphviz.org) and the `graph-trace-viz` utility.
-   Invoke `graph-trace-viz` within the same directory as the trace file.
-6. There should now be a file such as `<executable-name>.html` which can be
+5. Install [Graphviz](https://graphviz.org) and the `graph-trace-viz` utility
+   from this repo. Invoke `graph-trace-viz` within the same directory as the
+   trace file.
+6. There should now be a file called `<executable-name>.html` which can be
    viewed in your browser.
 
 ## User's Guide
@@ -113,9 +115,10 @@ when run. There are two types of traces:
   module and is available through the `Graph.Trace` module. A debug trace will
   only be emitted when the thing it is applied to is evaluated to WHNF.
 
-The plugin gives you some control over how and when traces are emitted.  There
-are a variety of constraints you can put on function signatures to control
-tracing, all of which are exported by `Graph.Trace`:
+The plugin gives you some control over how and when traces are emitted. This
+comes in the form of various type class constraints that you can put on
+function signatures to control tracing, all of which are exported by
+`Graph.Trace`:
 
 - `Trace`  
   On its own, this constraint says that traces should be emitted for a given
@@ -145,23 +148,41 @@ tracing, all of which are exported by `Graph.Trace`:
 
 If you want every function in your program to emit traces, you can use the
 `trace-all` plugin option which effectively adds the `Trace` constraint to all
-function definitons. To use this option, pass the `-fplugin-opt Graph.Trace:trace-all`
-option to GHC in addition to `-fplugin=Graph.Trace`.
+function definitons automatically. To use this option, pass the `-fplugin-opt
+Graph.Trace:trace-all` option to GHC in addition to `-fplugin=Graph.Trace`.
 
-If a trace file already exists for your executable being then new entries will
-be appended to that file. To start a new trace you'll need to rename or delete
-the old file.
+Notably, if you don't use the `trace-all` plugin option and don't place a
+`Trace` or `TraceDeep` constraint on any functions, then no tracing will occur.
+
+If a trace file already exists for the executable being traced, then new
+entries will be appended to that file. To start a new trace you'll need to
+rename or delete the old file.
 
 ### `graph-trace-viz` utility
 Once you've generated a `*.trace` file by compiling your program with the
 `Graph.Trace` plugin and running it, the `graph-trace-viz` utility can render
-the graph as an html document. It is dependent on
-[Graphviz](https://graphviz.org), so you must install that on your system
-(there should be an executable called `dot` on your PATH). Simply invoke
-`graph-trace-viz` in the same directory as the `*.trace` file and it will write
-an `*.html` document. By default it will read all trace files in the current
-directory but you can specify the files by giving them as command line
-arguments instead.
+the resulting graph as an interactive html document. It is dependent on
+[Graphviz](https://graphviz.org) to render the graph, so you must install that
+on your system (there should be an executable called `dot` accessible through
+your $PATH). Simply invoke `graph-trace-viz` in the same directory as the
+`*.trace` file and it will write the resulting `*.html` document. By default it
+will read all trace files in the current directory but you can also specify the
+files by giving them as command line arguments instead.
+
+#### Viewing call graphs
+- Each node in the graph corresponds to the invocation of a function. It has
+  the name of the function in its header as well as a body containing function
+  calls made from within that function and also any trace messages the user has
+  added. The children function calls will have an edge going out to the node
+  representing that call. If a node doesn't have any entries in its body then
+  it will only appear as an entry in its calling function rather than drawing
+  an edge to an empty node.
+- You can mouse over the node headers and body entries to see a tooltip with
+  their corresponding source code locations.
+- You can navigate the graph by clicking on the body entry of a function call
+  to go to that call's node while clicking on the header of a node takes you to
+  the node from which it was called. This feature is very useful for large call
+  graphs.
 
 ## Caveats
 
@@ -172,7 +193,14 @@ There are several known caveats you should be aware of:
   which are on by default for `O1` and `O2` settings, graph nodes that should
   be distinct can sometimes get merged into a single node. To prevent this, it
   is recommended that you turn these optimisations off using the `-fno-cse` and
-  `-fno-full-laziness` flags when compiling with the `graph-trace` plugin.
+  `-fno-full-laziness` GHC options when compiling with the `graph-trace`
+  plugin.
+- __Type signatures__  
+  Top level function bindings that don't have signatures won't be traced at
+  all. Function bindings in `where` or `let` blocks that don't have type
+  signatures won't emit function call traces, meaning they won't generate new
+  nodes in the graph but traces emitted from them will still appear in the node
+  body of the calling function.
 - __Type class methods__  
   For type class instance methods to be traced correctly, the class method
   definitions must be in a package compiled with the plugin and you'll also
@@ -182,9 +210,15 @@ There are several known caveats you should be aware of:
   If you have a function binding that takes a rank-n quantified type as a
   parameter, this can cause compilation with the plugin to fail. With GHC 9.2
   and above, giving a type signature to the binding will resolve the issue.
+- __Performance__  
+  Since additional work must be done to instrument the code, compilation may be
+  noticeably slower than normal. Additionally, the instrumented program may
+  perform worse due to the additional work of emitting traces.
 - __View patterns__  
   Traces for function calls in view patterns get associated to the node one
   level up from the function using the view pattern.
 - __Pattern synonyms__  
   Function calls in pattern synonym matches do not get traced.
+- It probably goes without saying but you should not compile production
+  deployments with this plugin.
 - The plugin does not support GHC versions less than 8.10.x
