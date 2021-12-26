@@ -8,6 +8,7 @@ synopsis:
 description:
   A plugin that instruments a program so that running it produces a log which
   can be processed into a visual graph using @graph-trace-viz@.
+  See the [README](https://github.com/aaronallen8455/graph-trace#graph-trace) for details.
 
 -- A URL where users can report bugs.
 bug-reports: https://github.com/aaronallen8455/graph-trace/issues
@@ -36,7 +37,7 @@ library
     Graph.Trace.Internal.Instrument
     Graph.Trace.Internal.Predicates
   build-depends: base >= 4.9 && < 5
-               , ghc
+               , ghc >= 8.0.0 && < 9.4.0
                , ghc-prim
                , ghc-boot
                , containers

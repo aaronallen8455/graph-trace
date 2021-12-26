@@ -9,6 +9,7 @@ description:
   Creates an HTML document with an explorable graph which represents
   the execution of a program. Each unique invocation of a function is
   represented as an edge in the graph.
+  See the [README](https://github.com/aaronallen8455/graph-trace#graph-trace) for details.
 
 -- A URL where users can report bugs.
 bug-reports: https://github.com/aaronallen8455/graph-trace/issues

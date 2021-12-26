@@ -4,12 +4,13 @@ version:            0.1.0.0
 
 -- A short (one-line) description of the package.
 synopsis:
-  Converts a graph-trace log into a DOT file for use with graphviz
+  Converts a graph-trace log into a DOT file for use with Graphviz
 
 -- A longer description of the package.
 description:
   Creates a DOT file from a @graph-trace@ log which is useable with
-  <https://graphviz.org graphviz>.
+  [Graphviz](https://graphviz.org).
+  See the [README](https://github.com/aaronallen8455/graph-trace#graph-trace) for details.
 
 -- A URL where users can report bugs.
 bug-reports: https://github.com/aaronallen8455/graph-trace/issues

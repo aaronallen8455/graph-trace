@@ -213,7 +213,7 @@ There are several known caveats you should be aware of:
 - __Performance__  
   Since additional work must be done to instrument the code, compilation may be
   noticeably slower than normal. Additionally, the instrumented program may
-  perform worse due to the additional work of emitting traces.
+  perform worse due to the additional overhead of emitting traces.
 - __View patterns__  
   Traces for function calls in view patterns get associated to the node one
   level up from the function using the view pattern.
