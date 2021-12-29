@@ -1,3 +1,7 @@
+{-# LANGUAGE CPP #-}
+# if MIN_VERSION_ghc(9,0,0)
+{-# LANGUAGE LinearTypes #-}
+# endif
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -88,7 +92,14 @@ fileLock = unsafePerformIO $ do
 {-# NOINLINE fileLock  #-}
 
 -- | Emits a message to the log signaling a function invocation
-entry :: forall rep (a :: TYPE rep). (DebugIP, LPId rep) => a -> a
+entry
+#if MIN_VERSION_ghc(9,0,0)
+  :: forall rep m (a :: TYPE rep). (DebugIP, LPId rep m)
+  => a %m -> a
+#else
+  :: forall rep (a :: TYPE rep). (DebugIP, LPId rep)
+  => a -> a
+#endif
 entry =
   case ?_debug_ip of
     Nothing -> lpId
