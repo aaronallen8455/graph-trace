@@ -14,6 +14,7 @@
 {-# LANGUAGE ViewPatterns #-}
 --{-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE MagicHash #-}
 
 import           Control.Monad
 import           Control.Concurrent
@@ -23,6 +24,7 @@ import qualified Debug.Trace as DT
 import Class
 import           Data.Char
 import qualified Data.List as L
+import           GHC.Exts
 
 import qualified System.Random as Rand
 import           System.IO.Unsafe
@@ -38,6 +40,7 @@ main :: TraceDeep => IO ()
 main = do
   firstName <- prompt "Enter your first name"
   lastName <- prompt "Enter your last name"
+  let !x = unboxed "test"
   greet firstName lastName
 
 prompt :: String -> IO String
@@ -56,6 +59,9 @@ capitalize (x:xs) =
 greet :: String -> String -> IO ()
 greet first last =
   putStrLn $ "Hello, " <> first <> " " <> last <> "!"
+
+unboxed :: String -> Int#
+unboxed _ = 3#
 
 {-# NOINLINE main #-}
 -- main :: TraceDeep => IO ()
@@ -142,29 +148,29 @@ greet first last =
 -- -- -- test :: (?x :: String) => IO ()
 -- -- -- test = print ?x
 -- -- 
--- data FieldUpdate a
---   = FieldValue a
---   | FieldOmitted
---   | FieldNull
--- 
--- mkUpdater :: f FieldUpdate
---           -> f Maybe
---           -> (forall a. f a -> a x)
---           -> Maybe x
--- mkUpdater update original getField =
---   case getField update of
---     FieldValue a -> Just a
---     FieldOmitted -> getField original
---     FieldNull -> Nothing
--- 
--- data T f =
---   MkT
---     { t1 :: f Bool
---     , t2 :: f String
---     }
--- 
--- type TY = forall x. (forall a. T a -> a x) -> Maybe x
--- 
+data FieldUpdate a
+  = FieldValue a
+  | FieldOmitted
+  | FieldNull
+
+mkUpdater :: f FieldUpdate
+          -> f Maybe
+          -> (forall a. f a -> a x)
+          -> Maybe x
+mkUpdater update original getField =
+  case getField update of
+    FieldValue a -> Just a
+    FieldOmitted -> getField original
+    FieldNull -> Nothing
+
+data T f =
+  MkT
+    { t1 :: f Bool
+    , t2 :: f String
+    }
+
+type TY = forall x. (forall a. T a -> a x) -> Maybe x
+
 -- -- zz :: Int
 -- -- zz =
 -- --   let x :: [forall x. x -> x]
@@ -174,25 +180,25 @@ greet first last =
 -- zzz :: Int
 -- zzz = id head [1,2,3]
 
--- zzzz :: T FieldUpdate -> T Maybe -> T Maybe
--- zzzz update orig =
---   let updater :: TY --(forall a. T a -> a x) -> Maybe x
---       updater | let ?x = 1
---         = mkUpdater update orig
---    in MkT
---         { t1 = updater t1
---         , t2 = updater t2
---         }
+zzzz :: T FieldUpdate -> T Maybe -> T Maybe
+zzzz update orig =
+  let updater :: TY --(forall a. T a -> a x) -> Maybe x
+      updater | let ?x = 1
+        = mkUpdater update orig
+   in MkT
+        { t1 = updater t1
+        , t2 = updater t2
+        }
 
--- fzzz :: Trace => T FieldUpdate -> T Maybe -> T Maybe
--- fzzz update orig = entry $
---   let updater :: -- (?_debug_ip :: Maybe DebugContext)
---               (forall a. T a -> a x) -> Maybe x
---       updater -- | let ?_debug_ip = newIP'
---               = --entry $
---                 mkUpdater update orig
---       addOne = (+1)
---    in MkT
---      { t1 = updater t1
---      , t2 = updater t2
---      }
+fzzz :: Trace => T FieldUpdate -> T Maybe -> T Maybe
+fzzz update orig = entry $
+  let updater :: -- (?_debug_ip :: Maybe DebugContext)
+              (forall a. T a -> a x) -> Maybe x
+      updater -- | let ?_debug_ip = newIP'
+              = --entry $
+                mkUpdater update orig
+      addOne = (+1)
+   in MkT
+     { t1 = updater t1
+     , t2 = updater t2
+     }

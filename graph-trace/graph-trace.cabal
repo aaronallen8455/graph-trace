@@ -36,6 +36,7 @@ library
     Graph.Trace.Internal.Solver
     Graph.Trace.Internal.Instrument
     Graph.Trace.Internal.Predicates
+    Graph.Trace.Internal.RuntimeRep
   build-depends: base >= 4.9 && < 5
                , ghc >= 8.0.0 && < 9.4.0
                , ghc-prim
@@ -47,4 +48,4 @@ library
                , random
                , bytestring
   hs-source-dirs:      src
-  ghc-options: -Wall
+  ghc-options: -Wall -Wno-unticked-promoted-constructors

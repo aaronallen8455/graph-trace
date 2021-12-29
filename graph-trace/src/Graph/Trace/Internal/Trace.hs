@@ -1,3 +1,5 @@
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE BangPatterns #-}
@@ -16,11 +18,13 @@ import           Control.Concurrent.MVar
 import           Control.Monad
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
+import           GHC.Exts
 import           GHC.Stack (callStack, popCallStack)
 import           System.Environment (getProgName, lookupEnv)
 import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
 
+import           Graph.Trace.Internal.RuntimeRep (LPId(..))
 import           Graph.Trace.Internal.Types
 
 mkTraceEvent :: DebugIP => String -> Maybe Event
@@ -84,22 +88,23 @@ fileLock = unsafePerformIO $ do
 {-# NOINLINE fileLock  #-}
 
 -- | Emits a message to the log signaling a function invocation
-entry :: DebugIP => a -> a
-entry x =
+entry :: forall rep (a :: TYPE rep). (DebugIP, LPId rep) => a -> a
+entry =
   case ?_debug_ip of
-    Nothing -> x
+    Nothing -> lpId
     Just ip
-      | omitTraces (propagation ip) -> x
-      | otherwise -> unsafePerformIO $ do
-          withMVar fileLock $ \h -> do
-            let ev = EntryEvent
-                       (currentTag ip)
-                       (previousTag ip)
-                       (definitionSite ip)
-                       -- need to call popCallStack here to get actual call site
-                       (callStackToCallSite $ popCallStack callStack)
-            BSL.hPut h . (<> "\n") $ eventToLogStr ev
-          pure x
+      | omitTraces (propagation ip) -> lpId
+      | otherwise ->
+        let !() = unsafePerformIO $ do
+              withMVar fileLock $ \h -> do
+                let ev = EntryEvent
+                           (currentTag ip)
+                           (previousTag ip)
+                           (definitionSite ip)
+                           -- need to call popCallStack here to get actual call site
+                           (callStackToCallSite $ popCallStack callStack)
+                BSL.hPut h . (<> "\n") $ eventToLogStr ev
+         in lpId
 {-# NOINLINE entry  #-}
 
 omitTraces :: Propagation -> Bool
