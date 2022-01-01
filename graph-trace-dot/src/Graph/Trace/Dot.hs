@@ -170,8 +170,7 @@ graphToDot graph = header <> graphContent <> "}"
             if null entries && isJust mEdgeData
                then acc
                else tableStart
-                 <> labelCell
-                 <> mconcat cells
+                 <> tableEl cells
                  <> tableEnd
                  <> mconcat edges
                  <> acc
@@ -182,47 +181,67 @@ graphToDot graph = header <> graphContent <> "}"
         quoted bs = "\"" <> bs <> "\""
         -- Building a node
         mEdgeData = M.lookup key finalColorMap
-        nodeColor = case mEdgeData of
-                      Nothing -> ""
-                      Just (_, c) -> "BGCOLOR=" <> quoted c <> " "
+        nodeColor = snd <$> mEdgeData
         nodeToolTip = foldMap (("defined at " <>) . pprSrcCodeLoc) mSrcLoc
-        backHref = case mEdgeData of
-                     Nothing -> "HREF=\"\""
-                     Just (k, _) -> "HREF=\"#" <> keyStrEsc k <> "\""
-        labelCell = "<TR>" <> "<TD " <> backHref <> " TOOLTIP=\"" <> nodeToolTip
-                 <> "\" " <> nodeColor <> ">"
-                 <> foldMap (const "<FONT POINT-SIZE=\"7\">&larr;</FONT> ") mEdgeData
-                 <> "<B>"
-                 <> BSB.byteString (htmlEscape $ keyName key)
-                 <> "</B></TD></TR>\n"
-        tableStart = quoted (keyStr key) <> " [label=<\n<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" CELLPADDING=\"4\">"
-        tableEnd :: BSB.Builder
-        tableEnd = "</TABLE>>];"
+        backHref = foldMap (\(k, _) -> "#" <> keyStr k) mEdgeData
+        labelCell =
+          el "TR" []
+            [ el "TD" [ "HREF" .= backHref
+                      , "TOOLTIP" .= nodeToolTip
+                      , "BGCOLOR" .=? nodeColor
+                      ]
+                [ foldMap (const $ el "FONT" ["POINT-SIZE" .= "7"] ["&larr;"])
+                    mEdgeData
+                , " "
+                , el "B" [] [ BSB.byteString . htmlEscape $ keyName key ]
+                ]
+            ]
+        tableEl cells =
+          el "TABLE" [ "BORDER" .= "0"
+                     , "CELLBORDER" .= "1"
+                     , "CELLSPACING" .= "0"
+                     , "CELLPADDING" .= "4"
+                     ]
+            [ labelCell
+            , mconcat cells
+            ]
+        tableStart, tableEnd :: BSB.Builder
+        tableStart = quoted (keyStr key) <> " [label=<\n"
+        tableEnd = ">];"
 
         -- Building an entry in a node
         doEntry (cs, es, colors'@(color:nextColors), colorMap) ev = case ev of
           (Message str mCallSite, idx) ->
             let msgToolTip =
                   foldMap (("printed at " <>) . pprSrcCodeLoc) mCallSite
-                el = "<TR><TD HREF=\"\" TOOLTIP=\"" <> msgToolTip
-                  <> "\" ALIGN=\"LEFT\" PORT=\""
-                  <> BSB.wordDec idx <> "\">"
-                  <> BSB.byteString str <> "</TD></TR>"
-             in (el : cs, es, colors', colorMap)
+                msgEl =
+                  el "TR" []
+                    [ el "TD" [ "HREF" .= ""
+                              , "TOOLTIP" .= msgToolTip
+                              , "ALIGN" .= "LEFT"
+                              , "PORT" .= BSB.wordDec idx
+                              ]
+                        [ BSB.byteString str ]
+                    ]
+             in (msgEl : cs, es, colors', colorMap)
           (Edge edgeKey mCallSite, idx) ->
-            let href =
-                  case mEdge of
-                    Nothing -> " HREF=\"\""
-                    Just _ -> " HREF=\"#" <> keyStrEsc edgeKey <> "\""
+            let href = foldMap (const $ "#" <> keyStrEsc edgeKey) mEdge
                 elToolTip =
                   foldMap (("called at " <>) . pprSrcCodeLoc) mCallSite
-                el = "<TR><TD TOOLTIP=\"" <> elToolTip
-                  <> "\" ALIGN=\"LEFT\" CELLPADDING=\"1\" BGCOLOR=\""
-                  <> color <> "\" PORT=\"" <> BSB.wordDec idx <> "\""
-                  <> href
-                  <> "><FONT POINT-SIZE=\"8\">"
-                  <> BSB.byteString (htmlEscape $ keyName edgeKey)
-                  <> "</FONT></TD></TR>"
+                edgeEl =
+                  el "TR" []
+                    [ el "TD" [ "TOOLTIP" .= elToolTip
+                              , "ALIGN" .= "LEFT"
+                              , "CELLPADDING" .= "1"
+                              , "BGCOLOR" .= color
+                              , "PORT" .= BSB.wordDec idx
+                              , "HREF" .= href
+                              ]
+                        [ el "FONT" [ "POINT-SIZE" .= "8" ]
+                            [ BSB.byteString . htmlEscape $ keyName edgeKey ]
+                        ]
+                    ]
+
                 mEdge = do
                   (_, targetContent, _) <- M.lookup edgeKey graph
                   guard . not $ null targetContent
@@ -231,12 +250,29 @@ graphToDot graph = header <> graphContent <> "}"
                     <> " -> " <> quoted (keyStr edgeKey)
                     <> " [tooltip=\" \" colorscheme=set28 color=" <> color <> "];"
 
-             in ( el : cs
+             in ( edgeEl : cs
                 , maybe id (:) mEdge es
                 , nextColors
                 , M.insert edgeKey (key, color) colorMap
                 )
         doEntry ac _ = ac
+
+type Element = BSB.Builder
+type Attr = (BSB.Builder, Maybe BSB.Builder)
+
+(.=) :: BSB.Builder -> BSB.Builder -> Attr
+name .= val = name .=? Just val
+
+(.=?) :: BSB.Builder -> Maybe BSB.Builder -> Attr
+name .=? val = (name, val)
+
+el :: BSB.Builder -> [Attr] -> [BSB.Builder] -> Element
+el name attrs children =
+  "<" <> name <> foldMap renderAttr attrs <> ">"
+  <> mconcat children <> "</" <> name <> ">"
+  where
+    renderAttr (aName, Just aVal) = " " <> aName <> "=\"" <> aVal <> "\""
+    renderAttr (_, Nothing) = mempty
 
 edgeColors :: [BSB.Builder]
 edgeColors = BSB.intDec <$> [1..8 :: Int]
