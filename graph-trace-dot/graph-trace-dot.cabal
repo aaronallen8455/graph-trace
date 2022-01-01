@@ -8,8 +8,8 @@ synopsis:
 
 -- A longer description of the package.
 description:
-  Creates a DOT file from a @graph-trace@ log which is useable with
-  [Graphviz](https://graphviz.org).
+  Creates a DOT file from a @graph-trace@ log which is useable with [Graphviz](https://graphviz.org).
+  .
   See the [README](https://github.com/aaronallen8455/graph-trace#graph-trace) for details.
 
 -- A URL where users can report bugs.
@@ -20,10 +20,10 @@ license: MIT
 
 -- The package author(s).
 -- author:
-maintainer:         aaron@flipstone.com
+maintainer:         aaronallen8455@gmail.com
 
 -- A copyright notice.
-copyright:     Copyright (C) 2021 Aaron Allen
+copyright:     Copyright (C) 2022 Aaron Allen
 category: tooling, debug, development, graph, plugin
 extra-source-files: CHANGELOG.md
 tested-with: GHC==9.2.1, GHC==9.0.1, GHC==8.10.7
