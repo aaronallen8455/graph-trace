@@ -84,10 +84,11 @@ run this program to generate the following trace of the call graph:
    ```
 3. Build your project (`cabal build all` or `stack build`).
 4. Running your program should now generate a file called `<executable-name>.trace`.
-5. Install [Graphviz](https://graphviz.org) and the `graph-trace-viz` utility
-   from this repo. Invoke `graph-trace-viz` within the same directory as the
-   trace file.
-6. There should now be a file called `<executable-name>.html` which can be
+5. Install [Graphviz](https://graphviz.org)
+6. Install the `graph-trace-viz` utility by running `cabal update && cabal
+   install graph-trace-viz` or `stack update && stack install graph-trace-viz`.
+7. Invoke `graph-trace-viz` within the same directory as the trace file.
+   There should now be a file called `<executable-name>.html` which can be
    viewed in your browser.
 
 ## User's Guide
@@ -168,6 +169,10 @@ your $PATH). Simply invoke `graph-trace-viz` in the same directory as the
 `*.trace` file and it will write the resulting `*.html` document. By default it
 will read all trace files in the current directory but you can also specify the
 files by giving them as command line arguments instead.
+
+#### Installing `graph-trace-viz`
+To install, run `cabal update && cabal install graph-trace-viz`
+or `stack update && stack install graph-trace-viz`.
 
 #### Viewing call graphs
 - Each node in the graph corresponds to the invocation of a function. It has

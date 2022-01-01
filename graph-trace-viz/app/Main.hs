@@ -2,14 +2,17 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Main where
 
+import           Control.Monad
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy as BSL
 import           Data.FileEmbed (embedFile)
 import           Data.Foldable (for_)
 import qualified Data.List as List
+import           Data.Maybe (isJust)
 import qualified System.Directory as Dir
 import           System.Environment
+import           System.Exit (die)
 import           System.IO
 import qualified System.Process as Proc
 
@@ -40,6 +43,9 @@ main = do
 
         htmlHeader = $(embedFile "extras/header.html")
         htmlFooter = $(embedFile "extras/footer.html")
+
+    dotExists <- isJust <$> Dir.findExecutable "dot"
+    unless dotExists $ die "Error! Graphviz is not installed or not accessible"
 
     withFile fileName WriteMode $ \h -> do
       hSetBinaryMode h True
