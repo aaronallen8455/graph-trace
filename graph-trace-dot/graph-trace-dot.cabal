@@ -39,7 +39,7 @@ library
                , cryptohash-sha256
                , base16-bytestring
   hs-source-dirs: src
-  ghc-options: -Wall
+  ghc-options: -Wall -O2
 
 
 executable graph-trace-dot
@@ -52,4 +52,4 @@ executable graph-trace-dot
                , attoparsec
                , graph-trace-dot
   hs-source-dirs: app
-  ghc-options: -Wall
+  ghc-options: -Wall -O2

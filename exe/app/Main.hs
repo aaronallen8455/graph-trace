@@ -45,6 +45,7 @@ main = do
 
 prompt :: String -> IO String
 prompt str = do
+  traceM str
   putStrLn str
   input <- getLine
   traceM $ "input: " <> input

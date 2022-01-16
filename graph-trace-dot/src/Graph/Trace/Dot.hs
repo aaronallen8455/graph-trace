@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -26,12 +27,12 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import           Data.Foldable (foldl')
 import qualified Data.List as List
-import qualified Data.Map.Lazy as ML
 import qualified Data.Map.Strict as M
 import           Data.Maybe (fromMaybe, isJust, mapMaybe)
 import           Data.Monoid (Alt(..))
 import           Data.Ord (Down(..))
 import           Data.Semigroup (Min(..))
+import qualified Data.Set as S
 
 --------------------------------------------------------------------------------
 -- Types
@@ -176,7 +177,7 @@ htmlEscape bs = foldl' doReplacement bs replacements
 
 buildTree :: [LogEntry] -> Tree
 buildTree = fst . foldl' build (mempty, cycle edgeColors) where
-  build (graph, colors@(color:colorTail)) entry =
+  build (!graph, colors@(color:colorTail)) entry =
     case entry of
       Trace tag msg callSite -> (,colors) $
         M.insertWith (<>)
@@ -234,7 +235,7 @@ buildNexus tree =
         case (==) <$> (toNexusKey <$> ia) <*> (toNexusKey <$> ib) of
           Alt (Just False) -> (fst a, True)
           _ -> a
-   in mapNode <$>
+   in M.map mapNode $
         M.mapKeysWith
           multipleInEdges
           toNexusKey
@@ -242,17 +243,29 @@ buildNexus tree =
 
 calcHashes :: Tree -> M.Map Key (BS.ByteString, Maybe Color)
 calcHashes tree =
-  let hashes = ML.foldrWithKey go mempty tree
-      go key = ML.insert key . hashNode
-      hashNode (_, (entries, defSite, Alt mColor, _)) =
-        ( Base16.encode . Sha.hash $
-            foldMap hashEntry entries <> BS8.pack (show defSite)
-        , mColor
-        )
-      hashEntry entry = case entry of
-        Message{} -> BS8.pack (show entry)
-        Edge key _ _ -> foldMap fst $ M.lookup key hashes
-   in hashes
+  let edgeKeys = foldMap collectEdgeKey tree
+      collectEdgeKey (_, (entries, _, _, _)) = foldMap collect entries where
+        collect = \case
+          Message{} -> mempty
+          Edge key _ _ -> S.singleton key
+      roots = M.keysSet tree S.\\ edgeKeys
+
+      hashTree :: Key -> (BS.ByteString, M.Map Key (BS.ByteString, Maybe Color))
+      hashTree key =
+        case M.lookup key tree of
+          Nothing -> mempty
+          Just (_, (entries, defSite, Alt mColor, _)) ->
+            let (entryHashes, hashes) = foldMap hashEntry entries
+                hash = Base16.encode . Sha.hash $
+                  keyName key <> entryHashes <> BS8.pack (show defSite)
+             in (hash, M.insert key (hash, mColor) hashes)
+
+      hashEntry = \case
+        Message msg loc ->
+          (Base16.encode . Sha.hash $ msg <> BS8.pack (show loc), mempty)
+        Edge key _ _ -> hashTree key
+
+   in snd $ foldMap hashTree roots
 
 --------------------------------------------------------------------------------
 -- Dot
