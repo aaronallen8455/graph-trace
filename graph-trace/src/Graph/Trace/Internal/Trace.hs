@@ -42,12 +42,12 @@ mkTraceEvent !msg = do
       (callStackToCallSite . popCallStack $ popCallStack callStack)
 
 writeEventToLog :: Event -> IO ()
--- forcing msg is required here since the file MVar could be entagled with it
 writeEventToLog event = seq fileLock $
   withMVar fileLock $ \h ->
     BSL.hPut h . (<> "\n") $ eventToLogStr event
 
 unsafeWriteTrace :: DebugIP => String -> a -> a
+-- forcing msg is required here since the file MVar could be entagled with it
 unsafeWriteTrace !msg thing =
   unsafePerformIO $ do
     case mkTraceEvent msg of

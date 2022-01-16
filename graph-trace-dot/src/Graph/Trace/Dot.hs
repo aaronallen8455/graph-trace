@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Graph.Trace.Dot
@@ -13,13 +14,14 @@ import           Control.Applicative ((<|>))
 import           Control.Monad
 import qualified Data.Attoparsec.ByteString.Char8 as Atto
 import qualified Data.Attoparsec.ByteString.Lazy as AttoL
+import           Data.Bifunctor
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import           Data.Foldable (foldl')
 import qualified Data.List as List
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 import           Data.Maybe (isJust)
 import           Data.Monoid (Alt(..))
 import           Data.Ord (Down(..))
@@ -39,7 +41,10 @@ data LogEntry
       (Maybe Key) -- called by
       (Maybe SrcCodeLoc) -- definition site
       (Maybe SrcCodeLoc) -- call site
-  | Trace Key BS.ByteString (Maybe SrcCodeLoc)
+  | Trace
+      Key
+      BS.ByteString
+      (Maybe SrcCodeLoc)
   deriving Show
 
 data SrcCodeLoc =
@@ -111,87 +116,93 @@ data NodeEntry
             (Maybe SrcCodeLoc) -- ^ call site
   | Edge Key -- ^ Id of the invocation to link to
          (Maybe SrcCodeLoc) -- ^ call site
+         Color
   deriving Show
+
+type Color = BSB.Builder
 
 -- Remembers the order in which the elements were inserted
 type Graph =
   M.Map Key ( Min Int -- order
-            , [NodeEntry] -- contents
-            , Alt Maybe SrcCodeLoc -- definition site
+            , ( [NodeEntry] -- contents
+              , Alt Maybe SrcCodeLoc -- definition site
+              , Alt Maybe Color -- node color
+              , Alt Maybe Key -- back link
+              )
             )
 
+-- could have a mapping from Key to hash of that node's contents
+-- the Graph would then be a mapping from Hash to content
+
 buildGraph :: [LogEntry] -> Graph
-buildGraph = foldl' build mempty where
-  build graph entry =
+buildGraph = fst . foldl' build (mempty, cycle edgeColors) where
+  build (graph, colors@(color:colorTail)) entry =
     case entry of
-      Trace tag msg callSite ->
+      Trace tag msg callSite -> (,colors) $
         M.insertWith (<>)
           tag
-          (graphSize, [Message msg callSite], Alt Nothing)
+          (graphSize, ([Message msg callSite], mempty, mempty, mempty))
           graph
-      Entry curTag (Just prevTag) defSite callSite ->
+      Entry curTag (Just prevTag) defSite callSite -> (,colorTail) .
           M.insertWith (<>)
             curTag
-            (graphSize + 1, [], Alt defSite)
+            (graphSize + 1, ([], Alt defSite, Alt $ Just color, Alt $ Just prevTag))
         $ M.insertWith (<>)
             prevTag
-            (graphSize, [Edge curTag callSite], Alt Nothing)
+            (graphSize, ([Edge curTag callSite color], mempty, mempty, mempty))
             graph
-      Entry curTag Nothing defSite _ ->
-        M.insertWith (<>) curTag (graphSize, [], Alt defSite) graph
+      Entry curTag Nothing defSite _ -> (,colorTail) $
+        M.insertWith (<>)
+          curTag
+          (graphSize, ([], Alt defSite, Alt $ Just color, mempty))
+          graph
     where
       graphSize = Min $ M.size graph
+  build acc _ = acc
 
 graphToDot :: Graph -> BSB.Builder
 graphToDot graph = header <> graphContent <> "}"
   where
-    orderedEntries = map (\(key, (_, content, srcLoc)) -> (key, (content, getAlt srcLoc)))
-                   . List.sortOn (Down . (\(x,_,_) -> x) . snd)
+    orderedEntries = map (second snd)
+                   . List.sortOn (Down . fst)
                    $ M.toList graph
     graphContent =
-      -- knot-tying is used to get the color of a node from the edge pointing to that node.
-      -- TODO consider doing separate traversals for edges and nodes so that the
-      -- result can be built strictly.
-      let (output, _, colorMap) =
-            foldl'
-              (doNode colorMap)
-              (mempty, cycle edgeColors, mempty)
-              orderedEntries
-       in output
+      foldl'
+        doNode
+        mempty
+        orderedEntries
 
     header :: BSB.Builder
     header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
 
-    doNode finalColorMap (acc, colors, colorMapAcc) (key, (entries, mSrcLoc)) =
-      let (cells, edges, colors', colorMapAcc')
-            = foldl' doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
+    doNode acc (key, (entries, Alt mSrcLoc, Alt mColor, Alt mBacklink)) =
+      let (cells, edges)
+            = foldl' doEntry ([], []) (zip entries [1..])
           acc' =
             -- don't render nodes that have in inbound edge but no content
-            if null entries && isJust mEdgeData
+            if null entries && isJust mBacklink
                then acc
                else tableStart
                  <> tableEl cells
                  <> tableEnd
                  <> mconcat edges
                  <> acc
-       in (acc', colors', colorMapAcc')
+       in acc'
       where
         keyStr (Key i k) = BSB.byteString k <> BSB.wordDec i
         keyStrEsc k = keyStr k { keyName = htmlEscape $ keyName k }
         quoted bs = "\"" <> bs <> "\""
         -- Building a node
-        mEdgeData = M.lookup key finalColorMap
-        nodeColor = snd <$> mEdgeData
         nodeToolTip = foldMap (("defined at " <>) . pprSrcCodeLoc) mSrcLoc
-        backHref = foldMap (\(k, _) -> "#" <> keyStr k) mEdgeData
+        backHref = foldMap (\k -> "#" <> keyStr k) mBacklink
         labelCell =
           el "TR" []
             [ el "TD" [ "HREF" .= backHref
                       , "TOOLTIP" .= nodeToolTip
-                      , "BGCOLOR" .=? nodeColor
+                      , "BGCOLOR" .=? mColor
                       ]
                 [ foldMap (const $ el "FONT" ["POINT-SIZE" .= "7"] ["&larr;"])
-                    mEdgeData
+                    mBacklink
                 , " "
                 , el "B" [] [ BSB.byteString . htmlEscape $ keyName key ]
                 ]
@@ -210,7 +221,7 @@ graphToDot graph = header <> graphContent <> "}"
         tableEnd = ">];"
 
         -- Building an entry in a node
-        doEntry (cs, es, colors'@(color:nextColors), colorMap) ev = case ev of
+        doEntry (cs, es) ev = case ev of
           (Message str mCallSite, idx) ->
             let msgToolTip =
                   foldMap (("printed at " <>) . pprSrcCodeLoc) mCallSite
@@ -223,8 +234,8 @@ graphToDot graph = header <> graphContent <> "}"
                               ]
                         [ BSB.byteString str ]
                     ]
-             in (msgEl : cs, es, colors', colorMap)
-          (Edge edgeKey mCallSite, idx) ->
+             in (msgEl : cs, es)
+          (Edge edgeKey mCallSite color, idx) ->
             let href = foldMap (const $ "#" <> keyStrEsc edgeKey) mEdge
                 elToolTip =
                   foldMap (("called at " <>) . pprSrcCodeLoc) mCallSite
@@ -243,7 +254,7 @@ graphToDot graph = header <> graphContent <> "}"
                     ]
 
                 mEdge = do
-                  (_, targetContent, _) <- M.lookup edgeKey graph
+                  (_, (targetContent, _, _, _)) <- M.lookup edgeKey graph
                   guard . not $ null targetContent
                   Just $
                     quoted (keyStr key) <> ":" <> BSB.wordDec idx
@@ -252,10 +263,7 @@ graphToDot graph = header <> graphContent <> "}"
 
              in ( edgeEl : cs
                 , maybe id (:) mEdge es
-                , nextColors
-                , M.insert edgeKey (key, color) colorMap
                 )
-        doEntry ac _ = ac
 
 type Element = BSB.Builder
 type Attr = (BSB.Builder, Maybe BSB.Builder)
@@ -274,7 +282,7 @@ el name attrs children =
     renderAttr (aName, Just aVal) = " " <> aName <> "=\"" <> aVal <> "\""
     renderAttr (_, Nothing) = mempty
 
-edgeColors :: [BSB.Builder]
+edgeColors :: [Color]
 edgeColors = BSB.intDec <$> [1..8 :: Int]
 
 pprSrcCodeLoc :: SrcCodeLoc -> BSB.Builder
