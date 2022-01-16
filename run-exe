@@ -3,5 +3,5 @@ rm test-exe.trace
 cabal v2-build all
 # cat exe/breaking/input | cabal v2-exec breaking
 cabal v2-exec test-exe
-cabal v2-exec graph-trace-viz -- test-exe.trace
+cabal v2-exec graph-trace-viz -- --nexus test-exe.trace
 # dot -Tsvg debug.dot > test.svg

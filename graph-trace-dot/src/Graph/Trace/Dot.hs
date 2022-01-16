@@ -1,10 +1,12 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Graph.Trace.Dot
   ( parseLogEntries
   , parseLogEntry
-  , buildGraph
+  , buildTree
+  , buildNexus
   , graphToDot
   , Key(..)
   , LogEntry(..)
@@ -12,23 +14,28 @@ module Graph.Trace.Dot
 
 import           Control.Applicative ((<|>))
 import           Control.Monad
+import qualified Crypto.Hash.SHA256 as Sha
 import qualified Data.Attoparsec.ByteString.Char8 as Atto
 import qualified Data.Attoparsec.ByteString.Lazy as AttoL
 import           Data.Bifunctor
+import           Data.Bitraversable
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import           Data.Foldable (foldl')
 import qualified Data.List as List
+import qualified Data.Map.Lazy as ML
 import qualified Data.Map.Strict as M
-import           Data.Maybe (isJust)
+import           Data.Maybe (fromMaybe, isJust, mapMaybe)
 import           Data.Monoid (Alt(..))
 import           Data.Ord (Down(..))
 import           Data.Semigroup (Min(..))
 
-parseLogEntries :: BSL.ByteString -> Either String [LogEntry]
-parseLogEntries = AttoL.parseOnly (Atto.many' parseLogEntry <* Atto.endOfInput)
+--------------------------------------------------------------------------------
+-- Types
+--------------------------------------------------------------------------------
 
 data Key = Key { keyId :: !Word
                , keyName :: !BS.ByteString
@@ -54,23 +61,57 @@ data SrcCodeLoc =
     , srcCol :: Int
     } deriving (Eq, Ord, Show)
 
--- | Use this to escape special characters that appear in the HTML portion of
--- the dot code. Other strings such as node names should not be escaped.
-htmlEscape :: BS.ByteString -> BS.ByteString
-htmlEscape bs = foldl' doReplacement bs replacements
-  where
-    doReplacement acc (c, re) =
-      case BS8.break (== c) acc of
-        (before, after)
-          | BS.null after -> acc
-          | otherwise -> before <> re <> BS8.tail after
+data NodeEntry key
+  = Message BS.ByteString  -- ^ The trace message
+            (Maybe SrcCodeLoc) -- ^ call site
+  | Edge key -- ^ Id of the invocation to link to
+         (Maybe SrcCodeLoc) -- ^ call site
+         Color
+  deriving Show
 
-    replacements =
-      [ ('&', "&amp;")
-      , ('<', "&lt;")
-      , ('>', "&gt;")
-      , ('\\', "\\\\") -- not really an HTML escape, but still needed
-      ]
+type Color = BSB.Builder
+
+-- Remembers the order in which the elements were inserted. Is monoidal
+type Node key =
+  ( Min Int -- order
+  , ( [NodeEntry key] -- contents
+    , Alt Maybe SrcCodeLoc -- definition site
+    , Alt Maybe Color -- node color
+    , Alt Maybe key -- back link
+    )
+  )
+
+type Graph key = M.Map key (Node key)
+
+type Tree = Graph Key
+
+data NexusKey =
+  NexusKey { nexKeyName :: !BS.ByteString, nexKeyHash :: !BS.ByteString }
+  deriving (Eq, Ord, Show)
+
+type Nexus = Graph NexusKey
+
+class Ord key => IsKey key where
+  getKeyName :: key -> BS.ByteString
+  keyStr :: key -> BSB.Builder
+  keyStrEsc :: key -> BSB.Builder
+
+instance IsKey NexusKey where
+  getKeyName = nexKeyName
+  keyStr (NexusKey name hash) = BSB.byteString name <> BSB.byteString hash
+  keyStrEsc k = keyStr k { nexKeyName = htmlEscape $ nexKeyName k }
+
+instance IsKey Key where
+  getKeyName = keyName
+  keyStr (Key i k) = BSB.byteString k <> BSB.wordDec i
+  keyStrEsc k = keyStr k { keyName = htmlEscape $ keyName k }
+
+--------------------------------------------------------------------------------
+-- Parsing
+--------------------------------------------------------------------------------
+
+parseLogEntries :: BSL.ByteString -> Either String [LogEntry]
+parseLogEntries = AttoL.parseOnly (Atto.many' parseLogEntry <* Atto.endOfInput)
 
 parseKey :: Atto.Parser Key
 parseKey = do
@@ -111,31 +152,30 @@ parseSrcCodeLoc = do
         pure SrcCodeLoc{..}
   Just <$> parseLoc <|> Nothing <$ Atto.string "§§§"
 
-data NodeEntry
-  = Message BS.ByteString  -- ^ The trace message
-            (Maybe SrcCodeLoc) -- ^ call site
-  | Edge Key -- ^ Id of the invocation to link to
-         (Maybe SrcCodeLoc) -- ^ call site
-         Color
-  deriving Show
+-- | Use this to escape special characters that appear in the HTML portion of
+-- the dot code. Other strings such as node names should not be escaped.
+htmlEscape :: BS.ByteString -> BS.ByteString
+htmlEscape bs = foldl' doReplacement bs replacements
+  where
+    doReplacement acc (c, re) =
+      case BS8.break (== c) acc of
+        (before, after)
+          | BS.null after -> acc
+          | otherwise -> before <> re <> BS8.tail after
 
-type Color = BSB.Builder
+    replacements =
+      [ ('&', "&amp;")
+      , ('<', "&lt;")
+      , ('>', "&gt;")
+      , ('\\', "\\\\") -- not really an HTML escape, but still needed
+      ]
 
--- Remembers the order in which the elements were inserted
-type Graph =
-  M.Map Key ( Min Int -- order
-            , ( [NodeEntry] -- contents
-              , Alt Maybe SrcCodeLoc -- definition site
-              , Alt Maybe Color -- node color
-              , Alt Maybe Key -- back link
-              )
-            )
+--------------------------------------------------------------------------------
+-- Graph construction
+--------------------------------------------------------------------------------
 
--- could have a mapping from Key to hash of that node's contents
--- the Graph would then be a mapping from Hash to content
-
-buildGraph :: [LogEntry] -> Graph
-buildGraph = fst . foldl' build (mempty, cycle edgeColors) where
+buildTree :: [LogEntry] -> Tree
+buildTree = fst . foldl' build (mempty, cycle edgeColors) where
   build (graph, colors@(color:colorTail)) entry =
     case entry of
       Trace tag msg callSite -> (,colors) $
@@ -160,7 +200,65 @@ buildGraph = fst . foldl' build (mempty, cycle edgeColors) where
       graphSize = Min $ M.size graph
   build acc _ = acc
 
-graphToDot :: Graph -> BSB.Builder
+-- | Constructs a nexus by merging tree nodes that have identical content based
+-- on their hash.
+buildNexus :: Tree -> Nexus
+buildNexus tree =
+  let hashes = calcHashes tree
+      colorMap = M.fromList
+               . mapMaybe (bitraverse pure id)
+               $ M.elems hashes
+      toNexusKey key =
+        case M.lookup key hashes of
+          Nothing -> error "missing hash"
+          Just (hash, _) ->
+            NexusKey { nexKeyName = keyName key, nexKeyHash = hash }
+      mapNode ((order, (entries, loc, color, mKey)), multipleParents) =
+        (order, ( mapEntry <$> entries
+                , loc
+                , color
+                , guard (not multipleParents) >> toNexusKey <$> mKey
+                )
+        )
+      mapEntry = \case
+        Message msg loc -> Message msg loc
+        Edge key loc color ->
+          let nexKey = toNexusKey key
+              mColor = M.lookup (nexKeyHash nexKey) colorMap
+           in Edge nexKey
+                   loc
+                   (fromMaybe color mColor)
+      multipleInEdges
+          a@((_, (_, _, _, ia)), _)
+          ((_, (_, _, _, ib)), _) =
+        case (==) <$> (toNexusKey <$> ia) <*> (toNexusKey <$> ib) of
+          Alt (Just False) -> (fst a, True)
+          _ -> a
+   in mapNode <$>
+        M.mapKeysWith
+          multipleInEdges
+          toNexusKey
+          ((,False) <$> tree)
+
+calcHashes :: Tree -> M.Map Key (BS.ByteString, Maybe Color)
+calcHashes tree =
+  let hashes = ML.foldrWithKey go mempty tree
+      go key = ML.insert key . hashNode
+      hashNode (_, (entries, defSite, Alt mColor, _)) =
+        ( Base16.encode . Sha.hash $
+            foldMap hashEntry entries <> BS8.pack (show defSite)
+        , mColor
+        )
+      hashEntry entry = case entry of
+        Message{} -> BS8.pack (show entry)
+        Edge key _ _ -> foldMap fst $ M.lookup key hashes
+   in hashes
+
+--------------------------------------------------------------------------------
+-- Dot
+--------------------------------------------------------------------------------
+
+graphToDot :: IsKey key => Graph key -> BSB.Builder
 graphToDot graph = header <> graphContent <> "}"
   where
     orderedEntries = map (second snd)
@@ -189,8 +287,6 @@ graphToDot graph = header <> graphContent <> "}"
                  <> acc
        in acc'
       where
-        keyStr (Key i k) = BSB.byteString k <> BSB.wordDec i
-        keyStrEsc k = keyStr k { keyName = htmlEscape $ keyName k }
         quoted bs = "\"" <> bs <> "\""
         -- Building a node
         nodeToolTip = foldMap (("defined at " <>) . pprSrcCodeLoc) mSrcLoc
@@ -204,7 +300,7 @@ graphToDot graph = header <> graphContent <> "}"
                 [ foldMap (const $ el "FONT" ["POINT-SIZE" .= "7"] ["&larr;"])
                     mBacklink
                 , " "
-                , el "B" [] [ BSB.byteString . htmlEscape $ keyName key ]
+                , el "B" [] [ BSB.byteString . htmlEscape $ getKeyName key ]
                 ]
             ]
         tableEl cells =
@@ -249,7 +345,7 @@ graphToDot graph = header <> graphContent <> "}"
                               , "HREF" .= href
                               ]
                         [ el "FONT" [ "POINT-SIZE" .= "8" ]
-                            [ BSB.byteString . htmlEscape $ keyName edgeKey ]
+                            [ BSB.byteString . htmlEscape $ getKeyName edgeKey ]
                         ]
                     ]
 

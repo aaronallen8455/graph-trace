@@ -22,7 +22,11 @@ main :: IO ()
 main = do
   args <- getArgs
 
-  traceFiles <- case args of
+  let isFlag arg = "--" `List.isPrefixOf` arg
+      (flags, fileArgs) = span isFlag args
+      nexusFlag = "--nexus" `List.elem` flags
+
+  traceFiles <- case fileArgs of
     [] -> do
       contents <- Dir.listDirectory =<< Dir.getCurrentDirectory
       let isTraceFile = (".trace" `List.isSuffixOf`)
@@ -35,7 +39,10 @@ main = do
        . Dot.parseLogEntries
      <$> BSL.readFile traceFile
 
-    let dotFileContent = Dot.graphToDot $ Dot.buildGraph logContents
+    let tree = Dot.buildTree logContents
+        dotFileContent
+          | nexusFlag = Dot.graphToDot (Dot.buildNexus tree)
+          | otherwise = Dot.graphToDot tree
         fileName = (<> ".html")
                  $ if ".trace" `List.isSuffixOf` traceFile
                       then reverse . drop 6 $ reverse traceFile

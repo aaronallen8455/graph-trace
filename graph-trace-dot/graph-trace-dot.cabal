@@ -36,6 +36,8 @@ library
                , containers
                , directory
                , attoparsec
+               , cryptohash-sha256
+               , base16-bytestring
   hs-source-dirs: src
   ghc-options: -Wall
 

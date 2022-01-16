@@ -6,13 +6,17 @@ import qualified System.Directory as Dir
 import           System.Environment
 import           System.IO
 
-import           Graph.Trace.Dot (buildGraph, graphToDot, parseLogEntries)
+import           Graph.Trace.Dot (buildTree, buildNexus, graphToDot, parseLogEntries)
 
 main :: IO ()
 main = do
   args <- getArgs
 
-  traceFiles <- case args of
+  let isFlag arg = "--" `List.isPrefixOf` arg
+      (flags, fileArgs) = span isFlag args
+      nexusFlag = "--nexus" `List.elem` flags
+
+  traceFiles <- case fileArgs of
     [] -> do
       contents <- Dir.listDirectory =<< Dir.getCurrentDirectory
       let isTraceFile = (".trace" `List.isSuffixOf`)
@@ -25,7 +29,10 @@ main = do
        . parseLogEntries
      <$> BSL.readFile traceFile
 
-    let dotFileContent = graphToDot $ buildGraph logContents
+    let tree = buildTree logContents
+        dotFileContent
+          | nexusFlag = graphToDot $ buildNexus tree
+          | otherwise = graphToDot tree
         fileName = (<> ".dot")
                  $ if ".trace" `List.isSuffixOf` traceFile
                       then reverse . drop 6 $ reverse traceFile
