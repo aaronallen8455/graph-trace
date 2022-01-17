@@ -24,7 +24,7 @@ import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
-import           Data.Foldable (foldl', foldMap')
+import           Data.Foldable (foldl')
 import qualified Data.List as List
 import qualified Data.Map.Lazy as ML
 import qualified Data.Map.Strict as M
@@ -32,7 +32,6 @@ import           Data.Maybe (isJust)
 import           Data.Monoid (Alt(..))
 import           Data.Ord (Down(..))
 import           Data.Semigroup (Min(..))
-import qualified Data.Set as S
 
 --------------------------------------------------------------------------------
 -- Types
@@ -76,7 +75,7 @@ type Node key =
   ( Min Int -- order
   , ( [NodeEntry key] -- contents
     , Alt Maybe SrcCodeLoc -- definition site
-    , Alt Maybe key -- back link
+    , Alt Maybe (Maybe key) -- back link. Is Just Nothing if there are multiple incoming edges (nexus)
     )
   )
 
@@ -186,7 +185,7 @@ buildTree = foldl' build mempty where
       Entry curTag (Just prevTag) defSite callSite ->
           M.insertWith (<>)
             curTag
-            (graphSize + 1, ([], Alt defSite, Alt $ Just prevTag))
+            (graphSize + 1, ([], Alt defSite, Alt . Just $ Just prevTag))
         $ M.insertWith (<>)
             prevTag
             (graphSize, ([Edge curTag callSite], mempty, mempty))
@@ -214,7 +213,9 @@ buildNexus tree =
       mapNode ((order, (entries, loc, mKey)), multipleParents) =
         (order, ( mapEntry <$> entries
                 , loc
-                , guard (not multipleParents) >> toNexusKey <$> mKey
+                , if multipleParents
+                     then Alt (Just Nothing)
+                     else fmap toNexusKey <$> mKey
                 )
         )
 
@@ -225,12 +226,13 @@ buildNexus tree =
            in Edge nexKey
                    loc
 
+      -- Used to determine if a node has inbound edges from two different parents
       multipleInEdges
-          a@((_, (_, _, ia)), _)
-          ((_, (_, _, ib)), _) =
-        case (==) <$> (toNexusKey <$> ia) <*> (toNexusKey <$> ib) of
-          Alt (Just False) -> (fst a, True)
-          _ -> a
+          a@((_, (_, _, Alt ia)), multInA)
+          ((_, (_, _, Alt ib)), multInB) =
+        case (==) <$> (toNexusKey <$> join ia) <*> (toNexusKey <$> join ib) of
+          (Just False) -> (fst a, True)
+          _ -> (fst a, multInA || multInB)
 
    in M.map mapNode $
         M.mapKeysWith
@@ -238,42 +240,26 @@ buildNexus tree =
           toNexusKey
           ((,False) <$> tree)
 
-data StrictPair a b = StrictPair { sfst :: !a, ssnd :: !b }
-
-instance (Semigroup a, Semigroup b) => Semigroup (StrictPair a b) where
-  StrictPair a b <> StrictPair c d = StrictPair (a <> c) (b <> d)
-
-instance (Monoid a, Monoid b) => Monoid (StrictPair a b) where
-  mempty = StrictPair mempty mempty
-
 -- | Produce a mapping of tree keys to the hash for that node.
 calcHashes :: Tree -> M.Map Key BS.ByteString
 calcHashes tree =
-  let edgeKeys = foldMap' collectEdgeKey tree
+  -- this relies on knot tying and must therefore use the lazy Map api
+  let hashes = ML.foldlWithKey buildHash mempty tree
 
-      collectEdgeKey (_, (entries, _, _)) = foldMap' collect entries where
-        collect = \case
-          Message{} -> mempty
-          Edge key _ -> S.singleton key
-      roots = M.keysSet tree S.\\ edgeKeys
-
-      hashTree :: Key -> StrictPair BSB.Builder (M.Map Key BS.ByteString)
-      hashTree key =
-        case M.findWithDefault mempty key tree of
-          (_, (entries, defSite, _)) ->
-            let StrictPair entryHashes hashes = foldMap' hashEntry entries
-                hash = Base16.encode . Sha.hash $
-                  keyName key <> BSL.toStrict (BSB.toLazyByteString entryHashes)
-                  <> BS8.pack (show defSite)
-             in StrictPair (BSB.byteString hash) (M.insert key hash hashes)
+      buildHash acc key (_, (entries, defSite, _)) =
+        let entryHashes = foldMap hashEntry entries
+            hash = Base16.encode . Sha.hash
+                 $ keyName key
+                <> BSL.toStrict (BSB.toLazyByteString entryHashes)
+                <> BS8.pack (show defSite)
+         in ML.insert key hash acc
 
       hashEntry = \case
         Message msg loc ->
-          StrictPair (BSB.byteString . Base16.encode . Sha.hash $ msg <> BS8.pack (show loc)) mempty
-        Edge key _ -> hashTree key
-
-      StrictPair _ !hashMap = foldMap' hashTree roots
-   in hashMap
+          BSB.byteString . Base16.encode . Sha.hash
+            $ msg <> BS8.pack (show loc)
+        Edge key _ -> BSB.byteString $ ML.findWithDefault mempty key hashes
+   in hashes
 
 --------------------------------------------------------------------------------
 -- Dot
@@ -296,11 +282,12 @@ graphToDot graph = header <> graphContent <> "}"
     header :: BSB.Builder
     header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
 
-    doNode finalColorMap (acc, colors, colorMapAcc) (key, (entries, Alt mSrcLoc, Alt mBacklink)) =
+    doNode finalColorMap (acc, colors, colorMapAcc)
+                         (key, (entries, Alt mSrcLoc, Alt mBacklink)) =
       let (cells, edges, colors', colorMapAcc')
             = foldl' doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
           acc' =
-            -- don't render nodes that have in inbound edge but no content
+            -- don't render nodes that have inbound edge(s) but no content
             if null entries && isJust mBacklink
                then acc
                else tableStart
@@ -314,14 +301,14 @@ graphToDot graph = header <> graphContent <> "}"
         -- Building a node
         nodeColor = ML.lookup key finalColorMap
         nodeToolTip = foldMap (("defined at " <>) . pprSrcCodeLoc) mSrcLoc
-        backHref = foldMap (\k -> "#" <> keyStr k) mBacklink
+        backHref = (foldMap . foldMap) (\k -> "#" <> keyStr k) mBacklink
         labelCell =
           el "TR" []
             [ el "TD" [ "HREF" .= backHref
                       , "TOOLTIP" .= nodeToolTip
                       , "BGCOLOR" .=? nodeColor
                       ]
-                [ foldMap (const $ el "FONT" ["POINT-SIZE" .= "7"] ["&larr;"])
+                [ (foldMap . foldMap) (const $ el "FONT" ["POINT-SIZE" .= "7"] ["&larr;"])
                     mBacklink
                 , " "
                 , el "B" [] [ BSB.byteString . htmlEscape $ getKeyName key ]
