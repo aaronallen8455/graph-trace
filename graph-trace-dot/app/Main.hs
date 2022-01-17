@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy as BSL
 import           Data.Foldable (for_)
@@ -29,7 +30,7 @@ main = do
        . parseLogEntries
      <$> BSL.readFile traceFile
 
-    let tree = buildTree logContents
+    let !tree = buildTree logContents
         dotFileContent
           | nexusFlag = graphToDot $ buildNexus tree
           | otherwise = graphToDot tree

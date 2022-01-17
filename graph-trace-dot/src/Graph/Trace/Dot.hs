@@ -19,16 +19,16 @@ import qualified Crypto.Hash.SHA256 as Sha
 import qualified Data.Attoparsec.ByteString.Char8 as Atto
 import qualified Data.Attoparsec.ByteString.Lazy as AttoL
 import           Data.Bifunctor
-import           Data.Bitraversable
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
-import           Data.Foldable (foldl')
+import           Data.Foldable (foldl', foldMap')
 import qualified Data.List as List
+import qualified Data.Map.Lazy as ML
 import qualified Data.Map.Strict as M
-import           Data.Maybe (fromMaybe, isJust, mapMaybe)
+import           Data.Maybe (isJust)
 import           Data.Monoid (Alt(..))
 import           Data.Ord (Down(..))
 import           Data.Semigroup (Min(..))
@@ -67,7 +67,6 @@ data NodeEntry key
             (Maybe SrcCodeLoc) -- ^ call site
   | Edge key -- ^ Id of the invocation to link to
          (Maybe SrcCodeLoc) -- ^ call site
-         Color
   deriving Show
 
 type Color = BSB.Builder
@@ -77,7 +76,6 @@ type Node key =
   ( Min Int -- order
   , ( [NodeEntry key] -- contents
     , Alt Maybe SrcCodeLoc -- definition site
-    , Alt Maybe Color -- node color
     , Alt Maybe key -- back link
     )
   )
@@ -176,96 +174,106 @@ htmlEscape bs = foldl' doReplacement bs replacements
 --------------------------------------------------------------------------------
 
 buildTree :: [LogEntry] -> Tree
-buildTree = fst . foldl' build (mempty, cycle edgeColors) where
-  build (!graph, colors@(color:colorTail)) entry =
+buildTree = foldl' build mempty where
+  build graph entry =
     case entry of
-      Trace tag msg callSite -> (,colors) $
+      Trace tag msg callSite ->
         M.insertWith (<>)
           tag
-          (graphSize, ([Message msg callSite], mempty, mempty, mempty))
+          (graphSize, ([Message msg callSite], mempty, mempty))
           graph
-      Entry curTag (Just prevTag) defSite callSite -> (,colorTail) .
+
+      Entry curTag (Just prevTag) defSite callSite ->
           M.insertWith (<>)
             curTag
-            (graphSize + 1, ([], Alt defSite, Alt $ Just color, Alt $ Just prevTag))
+            (graphSize + 1, ([], Alt defSite, Alt $ Just prevTag))
         $ M.insertWith (<>)
             prevTag
-            (graphSize, ([Edge curTag callSite color], mempty, mempty, mempty))
+            (graphSize, ([Edge curTag callSite], mempty, mempty))
             graph
-      Entry curTag Nothing defSite _ -> (,colorTail) $
+
+      Entry curTag Nothing defSite _ ->
         M.insertWith (<>)
           curTag
-          (graphSize, ([], Alt defSite, Alt $ Just color, mempty))
+          (graphSize, ([], Alt defSite, mempty))
           graph
     where
       graphSize = Min $ M.size graph
-  build acc _ = acc
 
 -- | Constructs a nexus by merging tree nodes that have identical content based
 -- on their hash.
 buildNexus :: Tree -> Nexus
 buildNexus tree =
   let hashes = calcHashes tree
-      colorMap = M.fromList
-               . mapMaybe (bitraverse pure id)
-               $ M.elems hashes
       toNexusKey key =
         case M.lookup key hashes of
           Nothing -> error "missing hash"
-          Just (hash, _) ->
+          Just hash ->
             NexusKey { nexKeyName = keyName key, nexKeyHash = hash }
-      mapNode ((order, (entries, loc, color, mKey)), multipleParents) =
+
+      mapNode ((order, (entries, loc, mKey)), multipleParents) =
         (order, ( mapEntry <$> entries
                 , loc
-                , color
                 , guard (not multipleParents) >> toNexusKey <$> mKey
                 )
         )
+
       mapEntry = \case
         Message msg loc -> Message msg loc
-        Edge key loc color ->
+        Edge key loc ->
           let nexKey = toNexusKey key
-              mColor = M.lookup (nexKeyHash nexKey) colorMap
            in Edge nexKey
                    loc
-                   (fromMaybe color mColor)
+
       multipleInEdges
-          a@((_, (_, _, _, ia)), _)
-          ((_, (_, _, _, ib)), _) =
+          a@((_, (_, _, ia)), _)
+          ((_, (_, _, ib)), _) =
         case (==) <$> (toNexusKey <$> ia) <*> (toNexusKey <$> ib) of
           Alt (Just False) -> (fst a, True)
           _ -> a
+
    in M.map mapNode $
         M.mapKeysWith
           multipleInEdges
           toNexusKey
           ((,False) <$> tree)
 
-calcHashes :: Tree -> M.Map Key (BS.ByteString, Maybe Color)
+data StrictPair a b = StrictPair { sfst :: !a, ssnd :: !b }
+
+instance (Semigroup a, Semigroup b) => Semigroup (StrictPair a b) where
+  StrictPair a b <> StrictPair c d = StrictPair (a <> c) (b <> d)
+
+instance (Monoid a, Monoid b) => Monoid (StrictPair a b) where
+  mempty = StrictPair mempty mempty
+
+-- | Produce a mapping of tree keys to the hash for that node.
+calcHashes :: Tree -> M.Map Key BS.ByteString
 calcHashes tree =
-  let edgeKeys = foldMap collectEdgeKey tree
-      collectEdgeKey (_, (entries, _, _, _)) = foldMap collect entries where
+  let edgeKeys = foldMap' collectEdgeKey tree
+
+      collectEdgeKey (_, (entries, _, _)) = foldMap' collect entries where
         collect = \case
           Message{} -> mempty
-          Edge key _ _ -> S.singleton key
+          Edge key _ -> S.singleton key
       roots = M.keysSet tree S.\\ edgeKeys
 
-      hashTree :: Key -> (BS.ByteString, M.Map Key (BS.ByteString, Maybe Color))
+      hashTree :: Key -> StrictPair BSB.Builder (M.Map Key BS.ByteString)
       hashTree key =
-        case M.lookup key tree of
-          Nothing -> mempty
-          Just (_, (entries, defSite, Alt mColor, _)) ->
-            let (entryHashes, hashes) = foldMap hashEntry entries
+        case M.findWithDefault mempty key tree of
+          (_, (entries, defSite, _)) ->
+            let StrictPair entryHashes hashes = foldMap' hashEntry entries
                 hash = Base16.encode . Sha.hash $
-                  keyName key <> entryHashes <> BS8.pack (show defSite)
-             in (hash, M.insert key (hash, mColor) hashes)
+                  keyName key <> BSL.toStrict (BSB.toLazyByteString entryHashes)
+                  <> BS8.pack (show defSite)
+             in StrictPair (BSB.byteString hash) (M.insert key hash hashes)
 
       hashEntry = \case
         Message msg loc ->
-          (Base16.encode . Sha.hash $ msg <> BS8.pack (show loc), mempty)
-        Edge key _ _ -> hashTree key
+          StrictPair (BSB.byteString . Base16.encode . Sha.hash $ msg <> BS8.pack (show loc)) mempty
+        Edge key _ -> hashTree key
 
-   in snd $ foldMap hashTree roots
+      StrictPair _ !hashMap = foldMap' hashTree roots
+   in hashMap
 
 --------------------------------------------------------------------------------
 -- Dot
@@ -275,20 +283,22 @@ graphToDot :: IsKey key => Graph key -> BSB.Builder
 graphToDot graph = header <> graphContent <> "}"
   where
     orderedEntries = map (second snd)
-                   . List.sortOn (Down . fst)
+                   . List.sortOn (Down . fst . snd)
                    $ M.toList graph
     graphContent =
-      foldl'
-        doNode
-        mempty
-        orderedEntries
+      let (output, _, colorMap) =
+            foldl'
+              (doNode colorMap)
+              (mempty, cycle edgeColors, mempty)
+              orderedEntries
+       in output
 
     header :: BSB.Builder
     header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
 
-    doNode acc (key, (entries, Alt mSrcLoc, Alt mColor, Alt mBacklink)) =
-      let (cells, edges)
-            = foldl' doEntry ([], []) (zip entries [1..])
+    doNode finalColorMap (acc, colors, colorMapAcc) (key, (entries, Alt mSrcLoc, Alt mBacklink)) =
+      let (cells, edges, colors', colorMapAcc')
+            = foldl' doEntry ([], [], colors, colorMapAcc) (zip entries [1..])
           acc' =
             -- don't render nodes that have in inbound edge but no content
             if null entries && isJust mBacklink
@@ -298,17 +308,18 @@ graphToDot graph = header <> graphContent <> "}"
                  <> tableEnd
                  <> mconcat edges
                  <> acc
-       in acc'
+       in (acc', colors', colorMapAcc')
       where
         quoted bs = "\"" <> bs <> "\""
         -- Building a node
+        nodeColor = ML.lookup key finalColorMap
         nodeToolTip = foldMap (("defined at " <>) . pprSrcCodeLoc) mSrcLoc
         backHref = foldMap (\k -> "#" <> keyStr k) mBacklink
         labelCell =
           el "TR" []
             [ el "TD" [ "HREF" .= backHref
                       , "TOOLTIP" .= nodeToolTip
-                      , "BGCOLOR" .=? mColor
+                      , "BGCOLOR" .=? nodeColor
                       ]
                 [ foldMap (const $ el "FONT" ["POINT-SIZE" .= "7"] ["&larr;"])
                     mBacklink
@@ -330,7 +341,7 @@ graphToDot graph = header <> graphContent <> "}"
         tableEnd = ">];"
 
         -- Building an entry in a node
-        doEntry (cs, es) ev = case ev of
+        doEntry (cs, es, colors'@(color:nextColors), colorMap) = \case
           (Message str mCallSite, idx) ->
             let msgToolTip =
                   foldMap (("printed at " <>) . pprSrcCodeLoc) mCallSite
@@ -343,9 +354,19 @@ graphToDot graph = header <> graphContent <> "}"
                               ]
                         [ BSB.byteString str ]
                     ]
-             in (msgEl : cs, es)
-          (Edge edgeKey mCallSite color, idx) ->
-            let href = foldMap (const $ "#" <> keyStrEsc edgeKey) mEdge
+             in (msgEl : cs, es, colors', colorMap)
+          (Edge edgeKey mCallSite, idx) ->
+            let mTargetNode = M.lookup edgeKey graph
+                -- If the target node isn't empty then check if a color is
+                -- already assigned (for a nexus) otherwise use the next color.
+                edgeColor =
+                  case mTargetNode of
+                    Just (_, (content, _, _))
+                      | not (null content) ->
+                          M.findWithDefault color edgeKey colorMap
+                    _ -> color
+                -- TODO ^ don't need this lookup if not a nexus
+                href = foldMap (const $ "#" <> keyStrEsc edgeKey) mEdge
                 elToolTip =
                   foldMap (("called at " <>) . pprSrcCodeLoc) mCallSite
                 edgeEl =
@@ -353,7 +374,7 @@ graphToDot graph = header <> graphContent <> "}"
                     [ el "TD" [ "TOOLTIP" .= elToolTip
                               , "ALIGN" .= "LEFT"
                               , "CELLPADDING" .= "1"
-                              , "BGCOLOR" .= color
+                              , "BGCOLOR" .= edgeColor
                               , "PORT" .= BSB.wordDec idx
                               , "HREF" .= href
                               ]
@@ -363,16 +384,19 @@ graphToDot graph = header <> graphContent <> "}"
                     ]
 
                 mEdge = do
-                  (_, (targetContent, _, _, _)) <- M.lookup edgeKey graph
+                  (_, (targetContent, _, _)) <- mTargetNode
                   guard . not $ null targetContent
                   Just $
                     quoted (keyStr key) <> ":" <> BSB.wordDec idx
                     <> " -> " <> quoted (keyStr edgeKey)
-                    <> " [tooltip=\" \" colorscheme=set28 color=" <> color <> "];"
+                    <> " [tooltip=\" \" colorscheme=set28 color=" <> edgeColor <> "];"
 
              in ( edgeEl : cs
                 , maybe id (:) mEdge es
+                , nextColors
+                , M.insert edgeKey edgeColor colorMap
                 )
+        doEntry _ = mempty
 
 type Element = BSB.Builder
 type Attr = (BSB.Builder, Maybe BSB.Builder)

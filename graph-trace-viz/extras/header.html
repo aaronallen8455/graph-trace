@@ -36,7 +36,6 @@ window.onload = function () {
     if (pos) {
       event.preventDefault();
       scrollToPosition(pos.x, pos.y);
-      history.pushState('', '', window.location.pathname)
     } else {
       console.log('Node not found: ' + nodeName);
     }
