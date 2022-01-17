@@ -1,6 +1,6 @@
 cabal-version:      2.4
 name:               graph-trace-viz
-version:            0.1.0.0
+version:            0.1.1.0
 
 synopsis:
   Converts a graph-trace log into an HTML document
