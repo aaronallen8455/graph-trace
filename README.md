@@ -188,6 +188,11 @@ or `stack update && stack install graph-trace-viz`.
   to go to that call's node while clicking on the header of a node takes you to
   the node from which it was called. This feature is very useful for large call
   graphs.
+- By default each node represents a unique function call. You can change this
+  behavior by passing the `--nexus` flag to `graph-trace-viz` which causes
+  nodes that have identical content to be merged into a single node with
+  multiple parents. This can help remove visual clutter in the case of a
+  function being called repeatedly.
 
 ## Caveats
 
