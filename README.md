@@ -232,8 +232,8 @@ There are several known caveats you should be aware of:
 - __Unboxed runtime representations__  
   There is limited support for types with runtime representations other than
   the standard `Type` kind. If you're using a type with an unsupported
-  representation (unboxed products or sums for example) then you'll need to put
-  the `TraceMute` constraint on those functions.
+  representation (unboxed products or sums larger than 2 for example) then
+  you'll need to put the `TraceMute` constraint on those functions.
 - It probably goes without saying but you should not compile production
   deployments with this plugin.
 - The plugin does not support GHC versions less than 8.10.x

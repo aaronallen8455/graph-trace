@@ -1,3 +1,4 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 #if MIN_VERSION_ghc(9,0,0)
@@ -9,12 +10,17 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Graph.Trace.Internal.RuntimeRep
   ( LPId(..)
+  , makeInstancesForRep
+  , allRuntimeReps
   ) where
 
+import           Control.Monad
+import           Data.Traversable
 import           GHC.Exts
 #if MIN_VERSION_ghc(9,0,0)
 import           GHC.Types (Multiplicity(..))
 #endif
+import           Language.Haskell.TH
 
 -- | Levity polymorphic id function. Doesn't cover all runtime reps, in
 -- particular unboxed products and sums. Handles linearity as well.
@@ -26,96 +32,61 @@ class LPId (r :: RuntimeRep) where
   lpId :: forall (a :: TYPE r). a -> a
 #endif
 
+-- | A splice for generating instances for a given RuntimeRep
+makeInstancesForRep :: Q Type -> Q [InstanceDec]
+makeInstancesForRep rep = do
+  let instTypes =
 #if MIN_VERSION_ghc(9,0,0)
-instance LPId LiftedRep One where
-  lpId x = x
-instance LPId LiftedRep Many where
-  lpId x = x
-instance LPId UnliftedRep One where
-  lpId x = x
-instance LPId UnliftedRep Many where
-  lpId x = x
-instance LPId IntRep One where
-  lpId x = x
-instance LPId IntRep Many where
-  lpId x = x
-instance LPId Int8Rep One where
-  lpId x = x
-instance LPId Int8Rep Many where
-  lpId x = x
-instance LPId Int16Rep One where
-  lpId x = x
-instance LPId Int16Rep Many where
-  lpId x = x
-instance LPId Int32Rep One where
-  lpId x = x
-instance LPId Int32Rep Many where
-  lpId x = x
-instance LPId Int64Rep One where
-  lpId x = x
-instance LPId Int64Rep Many where
-  lpId x = x
-instance LPId WordRep One where
-  lpId x = x
-instance LPId WordRep Many where
-  lpId x = x
-instance LPId Word8Rep One where
-  lpId x = x
-instance LPId Word8Rep Many where
-  lpId x = x
-instance LPId Word16Rep One where
-  lpId x = x
-instance LPId Word16Rep Many where
-  lpId x = x
-instance LPId Word32Rep One where
-  lpId x = x
-instance LPId Word32Rep Many where
-  lpId x = x
-instance LPId Word64Rep One where
-  lpId x = x
-instance LPId Word64Rep Many where
-  lpId x = x
-instance LPId AddrRep One where
-  lpId x = x
-instance LPId AddrRep Many where
-  lpId x = x
-instance LPId FloatRep One where
-  lpId x = x
-instance LPId FloatRep Many where
-  lpId x = x
-instance LPId DoubleRep One where
-  lpId x = x
-instance LPId DoubleRep Many where
-  lpId x = x
+        [ [t| LPId |] `appT` rep `appT` [t| One |]
+        , [t| LPId |] `appT` rep `appT` [t| Many |]
+        ]
 #else
-instance LPId LiftedRep where
-  lpId = id
-instance LPId UnliftedRep where
-  lpId x = x
-instance LPId IntRep where
-  lpId x = x
-instance LPId Int8Rep where
-  lpId x = x
-instance LPId Int16Rep where
-  lpId x = x
-instance LPId Int32Rep where
-  lpId x = x
-instance LPId Int64Rep where
-  lpId x = x
-instance LPId WordRep where
-  lpId x = x
-instance LPId Word8Rep where
-  lpId x = x
-instance LPId Word16Rep where
-  lpId x = x
-instance LPId Word32Rep where
-  lpId x = x
-instance LPId Word64Rep where
-  lpId x = x
-instance LPId AddrRep where
-  lpId x = x
-instance LPId FloatRep where
-  lpId x = x
-instance LPId DoubleRep where
-  lpId x = x
+        [ [t| LPId |] `appT` rep ]
 #endif
+  for instTypes $ \instType -> do
+    x <- newName "x"
+    instanceD (pure []) instType
+      [ funD 'lpId [clause [varP x] (normalB $ varE x) []] ]
+
+-- | RuntimeReps to generate instances for
+runtimeReps :: [Q Type]
+runtimeReps =
+  [ [t| LiftedRep   |]
+  , [t| UnliftedRep |]
+  , [t| IntRep      |]
+  , [t| Int8Rep     |]
+  , [t| Int16Rep    |]
+  , [t| Int32Rep    |]
+  , [t| Int64Rep    |]
+  , [t| WordRep     |]
+  , [t| Word8Rep    |]
+  , [t| Word16Rep   |]
+  , [t| Word32Rep   |]
+  , [t| Word64Rep   |]
+  , [t| AddrRep     |]
+  , [t| FloatRep    |]
+  , [t| DoubleRep   |]
+  ]
+
+tupleReps :: [[Q Type]]
+tupleReps = do
+  len <- [0..2]
+  replicateM len runtimeReps
+
+unboxedTupleReps :: [Q Type]
+unboxedTupleReps = map go tupleReps where
+  go tupleRep = do
+    tys <- sequence tupleRep
+    let list = foldr (AppT . AppT PromotedConsT) PromotedNilT tys
+    conT 'TupleRep `appT` pure list
+
+unboxedSumReps :: [Q Type]
+unboxedSumReps = map go tupleReps where
+  go tupleRep = do
+    tys <- sequence tupleRep
+    let list = foldr (AppT . AppT PromotedConsT) PromotedNilT tys
+    conT 'SumRep `appT` pure list
+
+-- Does not include SIMD vectors b/c they are platform dependent
+allRuntimeReps :: [Q Type]
+allRuntimeReps = runtimeReps <> unboxedTupleReps <> unboxedSumReps

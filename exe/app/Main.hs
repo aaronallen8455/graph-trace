@@ -3,12 +3,10 @@
 -- {-# OPTIONS_GHC -fno-full-laziness -fno-cse #-}
 --{-# OPTIONS_GHC -ddump-rn-ast #-}
 
+{-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE ImpredicativeTypes #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -61,8 +59,8 @@ greet :: String -> String -> IO ()
 greet first last =
   putStrLn $ "Hello, " <> first <> " " <> last <> "!"
 
-unboxed :: String -> Int#
-unboxed _ = 3#
+unboxed :: String -> (# Int#, String #)
+unboxed _ = (# 3#, "test" #)
 
 {-# NOINLINE main #-}
 -- main :: TraceDeep => IO ()

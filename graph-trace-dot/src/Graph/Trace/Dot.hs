@@ -67,8 +67,6 @@ data NodeEntry key
          (Maybe SrcCodeLoc) -- ^ call site
   deriving Show
 
-type Color = BSB.Builder
-
 -- Remembers the order in which the elements were inserted. Is monoidal
 type Node key =
   ( Min Int -- order
@@ -182,13 +180,15 @@ buildTree = foldl' build mempty where
           graph
 
       Entry curTag (Just prevTag) defSite callSite ->
-          M.insertWith (<>)
-            curTag
-            (graphSize + 1, ([], Alt defSite, Alt . Just $ Just prevTag))
-        $ M.insertWith (<>)
-            prevTag
-            (graphSize, ([Edge curTag callSite], mempty, mempty))
-            graph
+        let graph' =
+              M.insertWith (<>)
+                prevTag
+                (graphSize, ([Edge curTag callSite], mempty, mempty))
+                graph
+         in M.insertWith (<>)
+              curTag
+              (Min $ M.size graph', ([], Alt defSite, Alt . Just $ Just prevTag))
+              graph'
 
       Entry curTag Nothing defSite _ ->
         M.insertWith (<>)
@@ -386,6 +386,7 @@ graphToDot graph = header <> graphContent <> "}"
 
 type Element = BSB.Builder
 type Attr = (BSB.Builder, Maybe BSB.Builder)
+type Color = BSB.Builder
 
 (.=) :: BSB.Builder -> BSB.Builder -> Attr
 name .= val = name .=? Just val
