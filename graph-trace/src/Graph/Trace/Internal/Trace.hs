@@ -29,7 +29,6 @@ import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
 
 import           Graph.Trace.Internal.RuntimeRep (LPId(..))
-import           Graph.Trace.Internal.TH ()
 import           Graph.Trace.Internal.Types
 
 mkTraceEvent :: DebugIP => String -> Maybe Event

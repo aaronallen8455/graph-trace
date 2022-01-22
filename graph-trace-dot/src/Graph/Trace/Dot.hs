@@ -106,7 +106,7 @@ instance IsKey Key where
 --------------------------------------------------------------------------------
 
 parseLogEntries :: BSL.ByteString -> Either String [LogEntry]
-parseLogEntries = AttoL.parseOnly (Atto.many' parseLogEntry <* Atto.endOfInput)
+parseLogEntries = AttoL.parseOnly (AttoL.many' parseLogEntry <* AttoL.endOfInput)
 
 parseKey :: Atto.Parser Key
 parseKey = do
