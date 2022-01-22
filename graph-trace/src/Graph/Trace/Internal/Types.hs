@@ -30,7 +30,7 @@ module Graph.Trace.Internal.Types
   ) where
 
 import qualified Data.ByteString.Lazy as BSL
-import qualified Data.ByteString.Lazy.Char8 as BSL8
+import qualified Data.ByteString.Builder as BSB
 import           GHC.Stack
 import           GHC.TypeLits
 import qualified Language.Haskell.TH.Syntax as TH
@@ -105,41 +105,39 @@ callStackToCallSite cs =
         }
     _ -> Nothing
 
+sep :: BSB.Builder
+sep = BSB.char8 '§'
+
 -- | Serialize an Event. The § character is used as both a separator and
 -- terminator. Don't use this character in trace messages, it will break!
-eventToLogStr :: Event -> BSL.ByteString
-eventToLogStr (EntryEvent current mPrevious mDefSite mCallSite) =
-  BSL8.intercalate "§"
-    [ "entry"
-    , keyStr current
-    , BSL8.pack . show $ invocationId current
-    , maybe "" keyStr mPrevious
-    , maybe "" (BSL8.pack . show . invocationId) mPrevious
-    , srcCodeLocToLogStr mDefSite
-    , srcCodeLocToLogStr mCallSite
-    ] <> "§"
-eventToLogStr (TraceEvent current message mCallSite) =
-  BSL8.intercalate "§"
-    [ "trace"
-    , keyStr current
-    , BSL8.pack . show $ invocationId current
-    , message
-    , srcCodeLocToLogStr mCallSite
-    ] <> "§"
+eventToLogStr :: Event -> BSB.Builder
+eventToLogStr (EntryEvent current mPrevious mDefSite mCallSite)
+   = BSB.stringUtf8 "entry" <> sep
+  <> keyStr current <> sep
+  <> BSB.wordDec (invocationId current) <> sep
+  <> foldMap keyStr mPrevious <> sep
+  <> foldMap (BSB.wordDec . invocationId) mPrevious <> sep
+  <> srcCodeLocToLogStr mDefSite <> sep
+  <> srcCodeLocToLogStr mCallSite <> sep
+eventToLogStr (TraceEvent current message mCallSite)
+   = BSB.stringUtf8 "trace" <> sep
+  <> keyStr current <> sep
+  <> BSB.wordDec (invocationId current) <> sep
+  <> BSB.lazyByteString message <> sep
+  <> srcCodeLocToLogStr mCallSite <> sep
 
-srcCodeLocToLogStr :: Maybe SrcCodeLoc -> BSL.ByteString
-srcCodeLocToLogStr mLoc =
-  BSL8.intercalate "§"
-    [ foldMap (BSL8.pack . srcModule) mLoc
-    , foldMap (BSL8.pack . show . srcLine) mLoc
-    , foldMap (BSL8.pack . show . srcCol) mLoc
-    ]
+srcCodeLocToLogStr :: Maybe SrcCodeLoc -> BSB.Builder
+srcCodeLocToLogStr mLoc
+   = foldMap (BSB.stringUtf8 . srcModule) mLoc <> sep
+  <> foldMap (BSB.intDec . srcLine) mLoc <> sep
+  <> foldMap (BSB.intDec . srcCol) mLoc
 
-keyStr :: DebugTag -> BSL.ByteString
+keyStr :: DebugTag -> BSB.Builder
 keyStr
-  = either
-      BSL8.pack
-      BSL8.pack
+  = BSB.stringUtf8
+  . either
+      id
+      id
   . debugKey
 
 data DebugNames =

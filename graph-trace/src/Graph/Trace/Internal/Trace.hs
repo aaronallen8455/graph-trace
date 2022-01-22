@@ -20,7 +20,7 @@ module Graph.Trace.Internal.Trace
 
 import           Control.Concurrent.MVar
 import           Control.Monad
-import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           GHC.Exts
 import           GHC.Stack (callStack, popCallStack)
@@ -44,7 +44,7 @@ mkTraceEvent !msg = do
 writeEventToLog :: Event -> IO ()
 writeEventToLog event = seq fileLock $
   withMVar fileLock $ \h ->
-    BSL.hPut h . (<> "\n") $ eventToLogStr event
+    BSB.hPutBuilder h . (<> "\n") $ eventToLogStr event
 
 unsafeWriteTrace :: DebugIP => String -> a -> a
 -- forcing msg is required here since the file MVar could be entagled with it
@@ -107,14 +107,13 @@ entry =
       | omitTraces (propagation ip) -> lpId
       | otherwise ->
         let !() = unsafePerformIO $ do
-              withMVar fileLock $ \h -> do
-                let ev = EntryEvent
-                           (currentTag ip)
-                           (previousTag ip)
-                           (definitionSite ip)
-                           -- need to call popCallStack here to get actual call site
-                           (callStackToCallSite $ popCallStack callStack)
-                BSL.hPut h . (<> "\n") $ eventToLogStr ev
+              let ev = EntryEvent
+                         (currentTag ip)
+                         (previousTag ip)
+                         (definitionSite ip)
+                         -- need to call popCallStack here to get actual call site
+                         (callStackToCallSite $ popCallStack callStack)
+              writeEventToLog ev
          in lpId
 {-# NOINLINE entry  #-}
 
