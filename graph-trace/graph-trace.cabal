@@ -1,6 +1,6 @@
 cabal-version:      2.4
 name:               graph-trace
-version:            0.1.0.0
+version:            0.1.0.1
 
 synopsis:
   Trace the call graph of a program

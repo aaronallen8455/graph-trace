@@ -219,8 +219,8 @@ There are several known caveats you should be aware of:
 - __Impredicative types__  
   If you have a function binding that takes a rank-n quantified type as a
   parameter, this can cause compilation with the plugin to fail. With GHC 9.2
-  and above, giving a type signature to the binding will resolve the issue.
-  Another option is to use a newtype wrapper over the rank-n portion.
+  and above, giving a type signature to the binding should resolve the issue.
+  Another option is [to use a newtype wrapper](https://gitlab.haskell.org/ghc/ghc/-/wikis/impredicative-polymorphism#workarounds).
 - __Performance__  
   Since additional work must be done to instrument the code, compilation may be
   noticeably slower than normal. Additionally, the instrumented program may

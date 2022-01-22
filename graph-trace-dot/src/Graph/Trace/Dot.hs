@@ -187,7 +187,8 @@ buildTree = foldl' build mempty where
                 graph
          in M.insertWith (<>)
               curTag
-              (Min $ M.size graph', ([], Alt defSite, Alt . Just $ Just prevTag))
+              (Min $ M.size graph'
+                , ([], Alt defSite, Alt . Just $ Just prevTag))
               graph'
 
       Entry curTag Nothing defSite _ ->
