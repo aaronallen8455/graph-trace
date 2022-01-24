@@ -49,7 +49,7 @@ executable graph-trace-dot
                , bytestring
                , containers
                , directory
-               , attoparsec >= 0.14
+               , attoparsec >= 0.13.2.2
                , graph-trace-dot
   hs-source-dirs: app
   ghc-options: -Wall

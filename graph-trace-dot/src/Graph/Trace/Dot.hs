@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -106,7 +107,11 @@ instance IsKey Key where
 --------------------------------------------------------------------------------
 
 parseLogEntries :: BSL.ByteString -> Either String [LogEntry]
-parseLogEntries = AttoL.parseOnly (AttoL.many' parseLogEntry <* AttoL.endOfInput)
+parseLogEntries =
+  AttoL.parseOnly (AttoL.many' parseLogEntry <* AttoL.endOfInput)
+#if !MIN_VERSION_attoparsec(0,14,0)
+  . BSL.toStrict
+#endif
 
 parseKey :: Atto.Parser Key
 parseKey = do
