@@ -1,34 +1,16 @@
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-#if MIN_VERSION_ghc(9,0,0)
-{-# LANGUAGE LinearTypes #-}
-#endif
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MonoLocalBinds #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Graph.Trace.Internal.RuntimeRep
-  ( LPId(..)
+  ( Lev
   ) where
 
 import           GHC.Exts
-#if MIN_VERSION_ghc(9,0,0)
-import           GHC.Types (Multiplicity(..))
-#endif
 
-import           Graph.Trace.Internal.TH (allRuntimeReps, makeInstancesForRep)
+class DummyConstraint
+instance DummyConstraint
 
--- | Levity polymorphic id function. Doesn't cover all runtime reps, in
--- particular unboxed products and sums with more than 2 elements. Handles
--- linearity as well.
-#if MIN_VERSION_ghc(9,0,0)
-class LPId (r :: RuntimeRep) (m :: Multiplicity) where
-  lpId :: forall (a :: TYPE r). a %m -> a
-#else
-class LPId (r :: RuntimeRep) where
-  lpId :: forall (a :: TYPE r). a -> a
-#endif
-
-
-$(concat <$> traverse (makeInstancesForRep ''LPId 'lpId) allRuntimeReps)
+-- | Allows for a levity polymorphic value to be used in an argument position.
+-- This trick was taken from Ed Kmett's `unboxed` library.
+type Lev (a :: TYPE rep) = DummyConstraint => a

@@ -386,8 +386,7 @@ mkNewDebugContext mDefSite newKey newProp mPrevCtx =
         (Deep, _) -> Deep
         _    -> newProp
 
--- | Wraps an expression with the 'entry' function. '$' is used to apply it
--- because it has same special impredicative type properties in ghc 9.2+.
+-- | Wraps an expression with the 'entry' function.
 emitEntryEvent
   :: Ghc.Name
   -> Ghc.GRHS Ghc.GhcRn (Ghc.LHsExpr Ghc.GhcRn)

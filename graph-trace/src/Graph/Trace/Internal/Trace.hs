@@ -1,3 +1,5 @@
+{-# LANGUAGE MonoLocalBinds #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE CPP #-}
 # if MIN_VERSION_ghc(9,0,0)
 {-# LANGUAGE LinearTypes #-}
@@ -28,7 +30,7 @@ import           System.Environment (getProgName, lookupEnv)
 import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
 
-import           Graph.Trace.Internal.RuntimeRep (LPId(..))
+import           Graph.Trace.Internal.RuntimeRep (Lev)
 import           Graph.Trace.Internal.Types
 
 mkTraceEvent :: DebugIP => String -> Maybe Event
@@ -94,17 +96,17 @@ fileLock = unsafePerformIO $ do
 -- | Emits a message to the log signaling a function invocation
 entry
 #if MIN_VERSION_ghc(9,0,0)
-  :: forall rep m (a :: TYPE rep). (DebugIP, LPId rep m)
-  => a %m -> a
+  :: forall rep m (a :: TYPE rep). DebugIP
+  => Lev a %m -> a
 #else
-  :: forall rep (a :: TYPE rep). (DebugIP, LPId rep)
-  => a -> a
+  :: forall rep (a :: TYPE rep). DebugIP
+  => Lev a -> a
 #endif
-entry =
+entry x =
   case ?_debug_ip of
-    Nothing -> lpId
+    Nothing -> x
     Just ip
-      | omitTraces (propagation ip) -> lpId
+      | omitTraces (propagation ip) -> x
       | otherwise ->
         let !() = unsafePerformIO $ do
               let ev = EntryEvent
@@ -114,7 +116,7 @@ entry =
                          -- need to call popCallStack here to get actual call site
                          (callStackToCallSite $ popCallStack callStack)
               writeEventToLog ev
-         in lpId
+         in x
 {-# NOINLINE entry  #-}
 
 omitTraces :: Propagation -> Bool
