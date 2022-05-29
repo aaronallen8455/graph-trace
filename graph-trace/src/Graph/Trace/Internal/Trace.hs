@@ -22,10 +22,10 @@ module Graph.Trace.Internal.Trace
 
 import           Control.Concurrent.MVar
 import           Control.Monad
-import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           GHC.Exts
 import           GHC.Stack (callStack, popCallStack)
+import qualified Mason.Builder as Mason
 import           System.Environment (getProgName, lookupEnv)
 import           System.IO
 import           System.IO.Unsafe (unsafePerformIO)
@@ -46,7 +46,7 @@ mkTraceEvent !msg = do
 writeEventToLog :: Event -> IO ()
 writeEventToLog event = seq fileLock $
   withMVar fileLock $ \h ->
-    BSB.hPutBuilder h . (<> "\n") $ eventToLogStr event
+    Mason.hPutBuilder h . (<> "\n") $ runBuilder (eventToLogStr event)
 
 unsafeWriteTrace :: DebugIP => String -> a -> a
 -- forcing msg is required here since the file MVar could be entagled with it

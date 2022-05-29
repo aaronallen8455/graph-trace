@@ -41,7 +41,8 @@ executable graph-trace-viz
                       process,
                       bytestring,
                       file-embed,
-                      directory
+                      directory,
+                      mason
     hs-source-dirs:   app
     default-language: Haskell2010
     ghc-options: -Wall

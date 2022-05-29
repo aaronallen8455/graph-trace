@@ -4,12 +4,12 @@ module Main where
 
 import           Control.Monad
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy as BSL
 import           Data.FileEmbed (embedFile)
 import           Data.Foldable (for_)
 import qualified Data.List as List
 import           Data.Maybe (isJust)
+import qualified Mason.Builder as Mason
 import qualified System.Directory as Dir
 import           System.Environment
 import           System.Exit (die)
@@ -66,7 +66,7 @@ main = do
         BS.hPut h htmlFooter
 
 -- | Invoke @dot@ to produce an svg document and write to the file handle
-writeSvg :: Handle -> BSB.Builder -> IO ()
+writeSvg :: Handle -> Dot.Builder -> IO ()
 writeSvg htmlFile dotContent =
   Proc.withCreateProcess (Proc.proc "dot" ["-Tsvg"])
       { Proc.std_in = Proc.CreatePipe
@@ -78,7 +78,7 @@ writeSvg htmlFile dotContent =
       hSetBuffering stdIn (BlockBuffering Nothing)
       hSetBinaryMode stdOut True
       hSetBuffering stdOut (BlockBuffering Nothing)
-      _ <- BSB.hPutBuilder stdIn dotContent
+      _ <- Mason.hPutBuilder stdIn (Dot.runBuilder dotContent)
       hClose stdIn
       svg <- BSL.hGetContents stdOut
       BSL.hPut htmlFile svg

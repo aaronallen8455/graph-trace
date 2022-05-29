@@ -33,6 +33,7 @@ library
   exposed-modules: Graph.Trace.Dot
   build-depends: base
                , bytestring
+               , mason
                , containers
                , directory
                , attoparsec >= 0.14
@@ -51,5 +52,6 @@ executable graph-trace-dot
                , directory
                , attoparsec >= 0.13.2.2
                , graph-trace-dot
+               , mason
   hs-source-dirs: app
   ghc-options: -Wall

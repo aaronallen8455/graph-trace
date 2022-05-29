@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveLift #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ConstraintKinds #-}
@@ -27,10 +28,12 @@ module Graph.Trace.Internal.Types
   , SrcCol
   , callStackToCallSite
   , DebugNames(..)
+  , Builder(..)
   ) where
 
 import qualified Data.ByteString.Lazy as BSL
-import qualified Data.ByteString.Builder as BSB
+import           Data.String (IsString(..))
+import qualified Mason.Builder as Mason
 import           GHC.Stack
 import           GHC.TypeLits
 import qualified Language.Haskell.TH.Syntax as TH
@@ -105,36 +108,36 @@ callStackToCallSite cs =
         }
     _ -> Nothing
 
-sep :: BSB.Builder
-sep = BSB.char8 '§'
+sep :: Builder
+sep = MkB $ Mason.char8 '§'
 
 -- | Serialize an Event. The § character is used as both a separator and
 -- terminator. Don't use this character in trace messages, it will break!
-eventToLogStr :: Event -> BSB.Builder
+eventToLogStr :: Event -> Builder
 eventToLogStr (EntryEvent current mPrevious mDefSite mCallSite)
-   = BSB.stringUtf8 "entry" <> sep
+   = stringUtf8 "entry" <> sep
   <> keyStr current <> sep
-  <> BSB.wordDec (invocationId current) <> sep
+  <> wordDec (invocationId current) <> sep
   <> foldMap keyStr mPrevious <> sep
-  <> foldMap (BSB.wordDec . invocationId) mPrevious <> sep
+  <> foldMap (wordDec . invocationId) mPrevious <> sep
   <> srcCodeLocToLogStr mDefSite <> sep
   <> srcCodeLocToLogStr mCallSite <> sep
 eventToLogStr (TraceEvent current message mCallSite)
-   = BSB.stringUtf8 "trace" <> sep
+   = stringUtf8 "trace" <> sep
   <> keyStr current <> sep
-  <> BSB.wordDec (invocationId current) <> sep
-  <> BSB.lazyByteString message <> sep
+  <> wordDec (invocationId current) <> sep
+  <> lazyByteString message <> sep
   <> srcCodeLocToLogStr mCallSite <> sep
 
-srcCodeLocToLogStr :: Maybe SrcCodeLoc -> BSB.Builder
+srcCodeLocToLogStr :: Maybe SrcCodeLoc -> Builder
 srcCodeLocToLogStr mLoc
-   = foldMap (BSB.stringUtf8 . srcModule) mLoc <> sep
-  <> foldMap (BSB.intDec . srcLine) mLoc <> sep
-  <> foldMap (BSB.intDec . srcCol) mLoc
+   = foldMap (stringUtf8 . srcModule) mLoc <> sep
+  <> foldMap (intDec . srcLine) mLoc <> sep
+  <> foldMap (intDec . srcCol) mLoc
 
-keyStr :: DebugTag -> BSB.Builder
+keyStr :: DebugTag -> Builder
 keyStr
-  = BSB.stringUtf8
+  = stringUtf8
   . either
       id
       id
@@ -151,3 +154,28 @@ data DebugNames =
     , entryName :: Ghc.Name
     , debugContextName :: Ghc.Name
     }
+
+-- A wrapper to avoid impredicative types
+newtype Builder =
+  MkB { runBuilder :: forall s. Mason.Buildable s => Mason.BuilderFor s }
+
+instance Semigroup Builder where
+  a <> b = MkB $ runBuilder a <> runBuilder b
+
+instance Monoid Builder where
+  mempty = MkB mempty
+
+instance IsString Builder where
+  fromString s = MkB $ fromString s
+
+intDec :: Int -> Builder
+intDec i = MkB $ Mason.intDec i
+
+wordDec :: Word -> Builder
+wordDec w = MkB $ Mason.wordDec w
+
+stringUtf8 :: String -> Builder
+stringUtf8 str = MkB $ Mason.stringUtf8 str
+
+lazyByteString :: BSL.ByteString -> Builder
+lazyByteString bs = MkB $ Mason.lazyByteString bs

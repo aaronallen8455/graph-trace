@@ -1,12 +1,12 @@
-import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy as BSL
 import           Data.Foldable (for_)
 import qualified Data.List as List
+import qualified Mason.Builder as Mason
 import qualified System.Directory as Dir
 import           System.Environment
 import           System.IO
 
-import           Graph.Trace.Dot (buildTree, buildNexus, graphToDot, parseLogEntries)
+import           Graph.Trace.Dot (buildNexus, buildTree, graphToDot, parseLogEntries, runBuilder)
 
 main :: IO ()
 main = do
@@ -45,7 +45,7 @@ main = do
       withFile fileName WriteMode $ \h -> do
         hSetBinaryMode h True
         hSetBuffering h (BlockBuffering Nothing)
-        BSB.hPutBuilder h dotFileContent
+        Mason.hPutBuilder h (runBuilder dotFileContent)
 
 helpText :: String
 helpText = unlines

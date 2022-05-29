@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
@@ -11,6 +12,7 @@ module Graph.Trace.Dot
   , graphToDot
   , Key(..)
   , LogEntry(..)
+  , Builder(..)
   ) where
 
 import           Control.Applicative ((<|>))
@@ -21,7 +23,6 @@ import qualified Data.Attoparsec.ByteString.Lazy as AttoL
 import           Data.Bifunctor
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base16 as Base16
-import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import           Data.Foldable (foldl')
@@ -32,6 +33,8 @@ import           Data.Maybe (isJust)
 import           Data.Monoid (Alt(..))
 import           Data.Ord (Down(..))
 import           Data.Semigroup (Min(..))
+import           Data.String (IsString(..))
+import qualified Mason.Builder as Mason
 
 --------------------------------------------------------------------------------
 -- Types
@@ -89,17 +92,17 @@ type Nexus = Graph NexusKey
 
 class Ord key => IsKey key where
   getKeyName :: key -> BS.ByteString
-  keyStr :: key -> BSB.Builder
-  keyStrEsc :: key -> BSB.Builder
+  keyStr :: key -> Builder
+  keyStrEsc :: key -> Builder
 
 instance IsKey NexusKey where
   getKeyName = nexKeyName
-  keyStr (NexusKey name hash) = BSB.byteString name <> BSB.byteString hash
+  keyStr (NexusKey name hash) = byteString name <> byteString hash
   keyStrEsc k = keyStr k { nexKeyName = htmlEscape $ nexKeyName k }
 
 instance IsKey Key where
   getKeyName = keyName
-  keyStr (Key i k) = BSB.byteString k <> BSB.wordDec i
+  keyStr (Key i k) = byteString k <> wordDec i
   keyStrEsc k = keyStr k { keyName = htmlEscape $ keyName k }
 
 --------------------------------------------------------------------------------
@@ -255,22 +258,22 @@ calcHashes tree =
         let entryHashes = foldMap hashEntry entries
             hash = Base16.encode . Sha.hash
                  $ keyName key
-                <> BSL.toStrict (BSB.toLazyByteString entryHashes)
+                <> Mason.toStrictByteString (runBuilder entryHashes)
                 <> BS8.pack (show defSite)
          in ML.insert key hash acc
 
       hashEntry = \case
         Message msg loc ->
-          BSB.byteString . Base16.encode . Sha.hash
+          byteString . Base16.encode . Sha.hash
             $ msg <> BS8.pack (show loc)
-        Edge key _ -> BSB.byteString $ ML.findWithDefault mempty key hashes
+        Edge key _ -> byteString $ ML.findWithDefault mempty key hashes
    in hashes
 
 --------------------------------------------------------------------------------
 -- Dot
 --------------------------------------------------------------------------------
 
-graphToDot :: IsKey key => Graph key -> BSB.Builder
+graphToDot :: IsKey key => Graph key -> Builder
 graphToDot graph = header <> graphContent <> "}"
   where
     orderedEntries = map (second snd)
@@ -284,8 +287,8 @@ graphToDot graph = header <> graphContent <> "}"
               orderedEntries
        in output
 
-    header :: BSB.Builder
-    header = "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
+    header :: Builder
+    header = MkB "digraph {\nnode [tooltip=\" \" shape=plaintext colorscheme=set28]\n"
 
     doNode finalColorMap (acc, colors, colorMapAcc)
                          (key, (entries, Alt mSrcLoc, Alt mBacklink)) =
@@ -316,7 +319,7 @@ graphToDot graph = header <> graphContent <> "}"
                 [ (foldMap . foldMap) (const $ el "FONT" ["POINT-SIZE" .= "7"] ["&larr;"])
                     mBacklink
                 , " "
-                , el "B" [] [ BSB.byteString . htmlEscape $ getKeyName key ]
+                , el "B" [] [ byteString . htmlEscape $ getKeyName key ]
                 ]
             ]
         tableEl cells =
@@ -328,9 +331,9 @@ graphToDot graph = header <> graphContent <> "}"
             [ labelCell
             , mconcat cells
             ]
-        tableStart, tableEnd :: BSB.Builder
-        tableStart = quoted (keyStr key) <> " [label=<\n"
-        tableEnd = ">];"
+        tableStart, tableEnd :: Builder
+        tableStart = quoted (keyStr key) <> MkB " [label=<\n"
+        tableEnd = MkB ">];"
 
         -- Building an entry in a node
         doEntry (cs, es, colors'@(color:nextColors), colorMap) = \case
@@ -342,9 +345,9 @@ graphToDot graph = header <> graphContent <> "}"
                     [ el "TD" [ "HREF" .= ""
                               , "TOOLTIP" .= msgToolTip
                               , "ALIGN" .= "LEFT"
-                              , "PORT" .= BSB.wordDec idx
+                              , "PORT" .= wordDec idx
                               ]
-                        [ BSB.byteString str ]
+                        [ byteString str ]
                     ]
              in (msgEl : cs, es, colors', colorMap)
           (Edge edgeKey mCallSite, idx) ->
@@ -358,20 +361,20 @@ graphToDot graph = header <> graphContent <> "}"
                           M.findWithDefault color edgeKey colorMap
                     _ -> color
                 -- TODO ^ don't need this lookup if not a nexus
-                href = foldMap (const $ "#" <> keyStrEsc edgeKey) mEdge
+                href = foldMap (const $ MkB "#" <> keyStrEsc edgeKey) mEdge
                 elToolTip =
-                  foldMap (("called at " <>) . pprSrcCodeLoc) mCallSite
+                  foldMap ((MkB "called at " <>) . pprSrcCodeLoc) mCallSite
                 edgeEl =
                   el "TR" []
                     [ el "TD" [ "TOOLTIP" .= elToolTip
                               , "ALIGN" .= "LEFT"
                               , "CELLPADDING" .= "1"
                               , "BGCOLOR" .= edgeColor
-                              , "PORT" .= BSB.wordDec idx
+                              , "PORT" .= wordDec idx
                               , "HREF" .= href
                               ]
                         [ el "FONT" [ "POINT-SIZE" .= "8" ]
-                            [ BSB.byteString . htmlEscape $ getKeyName edgeKey ]
+                            [ byteString . htmlEscape $ getKeyName edgeKey ]
                         ]
                     ]
 
@@ -379,7 +382,7 @@ graphToDot graph = header <> graphContent <> "}"
                   (_, (targetContent, _, _)) <- mTargetNode
                   guard . not $ null targetContent
                   Just $
-                    quoted (keyStr key) <> ":" <> BSB.wordDec idx
+                    quoted (keyStr key) <> ":" <> wordDec idx
                     <> " -> " <> quoted (keyStr edgeKey)
                     <> " [tooltip=\" \" colorscheme=set28 color=" <> edgeColor <> "];"
 
@@ -390,17 +393,17 @@ graphToDot graph = header <> graphContent <> "}"
                 )
         doEntry _ = mempty
 
-type Element = BSB.Builder
-type Attr = (BSB.Builder, Maybe BSB.Builder)
-type Color = BSB.Builder
+type Element = Builder
+type Attr = (Builder, Maybe Builder)
+type Color = Builder
 
-(.=) :: BSB.Builder -> BSB.Builder -> Attr
+(.=) :: Builder -> Builder -> Attr
 name .= val = name .=? Just val
 
-(.=?) :: BSB.Builder -> Maybe BSB.Builder -> Attr
+(.=?) :: Builder -> Maybe Builder -> Attr
 name .=? val = (name, val)
 
-el :: BSB.Builder -> [Attr] -> [BSB.Builder] -> Element
+el :: Builder -> [Attr] -> [Builder] -> Element
 el name attrs children =
   "<" <> name <> foldMap renderAttr attrs <> ">"
   <> mconcat children <> "</" <> name <> ">"
@@ -409,10 +412,32 @@ el name attrs children =
     renderAttr (_, Nothing) = mempty
 
 edgeColors :: [Color]
-edgeColors = BSB.intDec <$> [1..8 :: Int]
+edgeColors = intDec <$> [1..8 :: Int]
 
-pprSrcCodeLoc :: SrcCodeLoc -> BSB.Builder
+pprSrcCodeLoc :: SrcCodeLoc -> Builder
 pprSrcCodeLoc loc
-  = BSB.byteString (srcMod loc) <> ":"
- <> BSB.intDec (srcLine loc) <> ":"
- <> BSB.intDec (srcCol loc)
+  = byteString (srcMod loc) <> ":"
+ <> intDec (srcLine loc) <> ":"
+ <> intDec (srcCol loc)
+
+-- A wrapper to avoid impredicative types
+newtype Builder =
+  MkB { runBuilder :: forall s. Mason.Buildable s => Mason.BuilderFor s }
+
+instance Semigroup Builder where
+  a <> b = MkB $ runBuilder a <> runBuilder b
+
+instance Monoid Builder where
+  mempty = MkB mempty
+
+instance IsString Builder where
+  fromString s = MkB $ fromString s
+
+intDec :: Int -> Builder
+intDec i = MkB $ Mason.intDec i
+
+byteString :: BS.ByteString -> Builder
+byteString bs = MkB $ Mason.byteString bs
+
+wordDec :: Word -> Builder
+wordDec w = MkB $ Mason.wordDec w
