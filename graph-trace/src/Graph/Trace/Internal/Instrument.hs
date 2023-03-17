@@ -107,7 +107,7 @@ modifyBinding
        (Ghc.HsBindLR Ghc.GhcRn Ghc.GhcRn)
 modifyBinding nameMap debugNames
   bnd@Ghc.FunBind { Ghc.fun_id = Ghc.L' loc name
-                  , Ghc.fun_matches = mg@(Ghc.MG _ alts _) }
+                  , Ghc.fun_matches = mg@(Ghc.MG { Ghc.mg_alts = alts }) }
     | Just (mUserKey, prop) <- M.lookup name nameMap
     = do
       let key = case mUserKey of
@@ -131,7 +131,11 @@ modifyBinding nameMap _
         collectName = \case
           Ghc.VarPat _ (Ghc.unLoc -> name)
             | M.member name nameMap -> S.singleton name
+#if MIN_VERSION_ghc(9,6,0)
+          Ghc.AsPat _ (Ghc.unLoc -> name) _ _
+#else
           Ghc.AsPat _ (Ghc.unLoc -> name) _
+#endif
             | M.member name nameMap -> S.singleton name
           _ -> mempty
         vars = Syb.everything (<>) (Syb.mkQ mempty collectName) pat
@@ -154,7 +158,12 @@ mkWhereBinding whereBindName whereBindExpr =
     , Ghc.fun_id' = Ghc.noLocA' whereBindName
     , Ghc.fun_matches' =
         Ghc.MG
+#if MIN_VERSION_ghc(9,6,0)
+          { Ghc.mg_ext = Ghc.Generated
+#else
           { Ghc.mg_ext = Ghc.NoExtField
+          , Ghc.mg_origin = Ghc.Generated
+#endif
           , Ghc.mg_alts = Ghc.noLocA'
             [Ghc.noLocA' Ghc.Match
               { Ghc.m_ext = Ghc.emptyEpAnn
@@ -167,7 +176,12 @@ mkWhereBinding whereBindName whereBindExpr =
               , Ghc.m_grhss = Ghc.GRHSs
                   { Ghc.grhssExt = Ghc.emptyComments'
                   , Ghc.grhssGRHSs =
-                    [ Ghc.noLoc $ Ghc.GRHS
+                    [
+#if MIN_VERSION_ghc(9,4,0)
+                      Ghc.noLocA $ Ghc.GRHS
+#else
+                      Ghc.noLoc $ Ghc.GRHS
+#endif
                         Ghc.emptyEpAnn
                         []
                         whereBindExpr
@@ -177,7 +191,6 @@ mkWhereBinding whereBindName whereBindExpr =
                   }
               }
             ]
-          , Ghc.mg_origin = Ghc.Generated
           }
     }
 
@@ -418,8 +431,13 @@ updateDebugIPInGRHS whereBindName (Ghc.GRHS x guards body)
             Ghc.HsIPBinds Ghc.emptyEpAnn $
               Ghc.IPBinds Ghc.NoExtField
                 [ Ghc.noLocA' $ Ghc.IPBind
+#if MIN_VERSION_ghc(9,4,0)
+                    Ghc.NoExtField
+                    (Ghc.noLocA' $ Ghc.HsIPName "_debug_ip")
+#else
                     Ghc.emptyEpAnn
                     (Left . Ghc.noLoc $ Ghc.HsIPName "_debug_ip")
+#endif
                     (Ghc.noLocA' . Ghc.HsVar Ghc.NoExtField
                       $ Ghc.noLocA' whereBindName
                     )

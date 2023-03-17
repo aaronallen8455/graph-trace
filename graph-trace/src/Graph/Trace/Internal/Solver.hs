@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 module Graph.Trace.Internal.Solver
   ( tcPlugin
   ) where
@@ -11,6 +12,9 @@ tcPlugin =
     { Ghc.tcPluginInit = pure ()
     , Ghc.tcPluginStop = \_ -> pure ()
     , Ghc.tcPluginSolve = const tcPluginSolver
+#if MIN_VERSION_ghc(9,4,0)
+    , Ghc.tcPluginRewrite = mempty
+#endif
     }
 
 debuggerIpKey :: Ghc.FastString

@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE CPP #-}
 module Graph.Trace
   ( plugin
   , module DT
@@ -31,7 +32,11 @@ findImportedModule :: String -> Ghc.TcM Ghc.Module
 findImportedModule moduleName = do
   hscEnv <- Ghc.getTopEnv
   result <- liftIO $
+#if MIN_VERSION_ghc(9,4,0)
+    Ghc.findImportedModule hscEnv (Ghc.mkModuleName moduleName) Ghc.NoPkgQual
+#else
     Ghc.findImportedModule hscEnv (Ghc.mkModuleName moduleName) Nothing
+#endif
   case result of
     Ghc.Found _ m -> pure m
     _ -> error $ "unable to find module: " <> moduleName

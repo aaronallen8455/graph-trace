@@ -19,7 +19,70 @@ module Graph.Trace.Internal.GhcFacade
   , pattern L'
   ) where
 
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,6,0)
+import GHC.Builtin.Names as Ghc
+import GHC.Builtin.Types as Ghc
+import GHC.Core.Class as Ghc
+import GHC.Core.Make as Ghc
+import GHC.Core.Type as Ghc
+import GHC.Data.Bag as Ghc
+import qualified GHC.Data.EnumSet as EnumSet
+import GHC.Data.FastString as Ghc
+import GHC.Driver.Plugins as Ghc hiding (TcPlugin, DefaultingPlugin)
+import GHC.Driver.Session as Ghc
+import GHC.Hs as Ghc hiding (FunDep)
+import GHC.Iface.Env as Ghc
+import GHC.LanguageExtensions as Ghc hiding (UnicodeSyntax)
+import GHC.Rename.Expr as Ghc
+import GHC.Tc.Types as Ghc
+import GHC.Tc.Types.Constraint as Ghc
+import GHC.Tc.Types.Evidence as Ghc
+import GHC.Tc.Types.Origin as Ghc
+import GHC.Tc.Utils.Monad as Ghc
+import GHC.ThToHs as Ghc
+import GHC.Types.Basic as Ghc
+import GHC.Types.Fixity as Ghc
+import GHC.Types.Name as Ghc hiding (varName)
+import GHC.Types.PkgQual as Ghc
+import GHC.Types.SrcLoc as Ghc
+import GHC.Types.Unique.Supply as Ghc
+import GHC.Unit.Finder as Ghc
+import GHC.Unit.Types as Ghc
+import GHC.Utils.Outputable as Ghc
+
+#elif MIN_VERSION_ghc(9,4,0)
+import GHC.Builtin.Names as Ghc
+import GHC.Builtin.Types as Ghc
+import GHC.Core.Class as Ghc
+import GHC.Core.Make as Ghc
+import GHC.Core.Type as Ghc
+import GHC.Data.Bag as Ghc
+import qualified GHC.Data.EnumSet as EnumSet
+import GHC.Data.FastString as Ghc
+import GHC.Driver.Plugins as Ghc hiding (TcPlugin, DefaultingPlugin)
+import GHC.Driver.Session as Ghc
+import GHC.Hs as Ghc hiding (FunDep)
+import GHC.Iface.Env as Ghc
+import GHC.LanguageExtensions as Ghc hiding (UnicodeSyntax)
+import GHC.Rename.Expr as Ghc
+import GHC.Tc.Types as Ghc
+import GHC.Tc.Types.Constraint as Ghc
+import GHC.Tc.Types.Evidence as Ghc
+import GHC.Tc.Types.Origin as Ghc
+import GHC.Tc.Utils.Monad as Ghc
+import GHC.ThToHs as Ghc
+import GHC.Types.Basic as Ghc
+import GHC.Types.Fixity as Ghc
+import GHC.Types.Name as Ghc hiding (varName)
+import GHC.Types.PkgQual as Ghc
+import GHC.Types.SrcLoc as Ghc
+import GHC.Types.Unique.Supply as Ghc
+import GHC.Unit.Finder as Ghc
+import GHC.Unit.Module.Name as Ghc
+import GHC.Unit.Types as Ghc
+import GHC.Utils.Outputable as Ghc
+
+#elif MIN_VERSION_ghc(9,2,0)
 import GHC.Builtin.Names as Ghc
 import GHC.Builtin.Types as Ghc
 import GHC.Core.Class as Ghc
@@ -128,7 +191,14 @@ pattern FunBind'
   , fun_id'
   , fun_matches'
   } =
-#if MIN_VERSION_ghc(9,0,0)
+#if MIN_VERSION_ghc(9,6,0)
+    FunBind fun_ext' fun_id' fun_matches'
+pattern FunBind'
+  :: XFunBind GhcRn GhcRn
+  -> LIdP GhcRn
+  -> MatchGroup GhcRn (LHsExpr GhcRn)
+  -> HsBindLR GhcRn GhcRn
+#elif MIN_VERSION_ghc(9,0,0)
     FunBind fun_ext' fun_id' fun_matches' []
 pattern FunBind'
   :: XFunBind GhcRn GhcRn
@@ -210,7 +280,13 @@ pattern HsQualTy'
   -> Maybe (LHsContext GhcRn)
   -> LHsType GhcRn
   -> HsType GhcRn
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,4,0)
+pattern HsQualTy' x lctx body
+  <- HsQualTy x (Just -> lctx) body
+    where
+      HsQualTy' x Nothing body = HsQualTy x (noLocA []) body
+      HsQualTy' x (Just lctx) body = HsQualTy x lctx body
+#elif MIN_VERSION_ghc(9,2,0)
 pattern HsQualTy' x lctx body
   = HsQualTy x lctx body
 #else
